@@ -34,6 +34,14 @@ wordpress:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "1", memory: 768Mi }
 
+setup:
+  image: wordpress:cli
+  wooCommerceVersion: ""           # "" = latest compatible; pin a version for reproducible installs
+  sampleProducts: true
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 768Mi }
+
 # Rendered into Kubernetes Secrets. The chart refuses to install while any of them is empty.
 secrets:
   dbRootPassword: ""

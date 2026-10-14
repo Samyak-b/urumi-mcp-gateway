@@ -5,7 +5,9 @@
 #   make secrets   generate passwords into deploy/secrets/ (git-ignored); existing ones are kept
 #   make lint      helm lint every chart with this environment's values
 #   make deploy    helm upgrade --install every release (waits until ready)
+#   make creds     print the logins (keep them off camera)
 #   make status    pods, services, ingresses, volumes in the project namespaces
+#   make logs-setup follow the store setup Job
 #   make down      delete the local cluster (all data goes with it)
 #
 # ENV=prod switches to the charts' values-prod.yaml files.
@@ -20,7 +22,7 @@ SECRETS := deploy/secrets
 
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
 
-.PHONY: help tools cluster secrets lint deploy status down
+.PHONY: help tools cluster secrets lint deploy creds status logs-setup down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -49,5 +51,12 @@ lint:
 deploy:
 	$(HELM_DEPLOY) store charts/store -n store -f charts/store/values-$(ENV).yaml -f $(SECRETS)/store.yaml
 
+creds:
+	@source <(grep -E '^STORE_ADMIN_PASSWORD=' $(SECRETS)/generated.env); \
+	echo "WordPress  http://store.localhost/wp-admin   admin / $$STORE_ADMIN_PASSWORD"
+
 status:
 	kubectl get pods,svc,ingress,pvc -n store
+
+logs-setup:
+	kubectl -n store logs job/store-setup -f
