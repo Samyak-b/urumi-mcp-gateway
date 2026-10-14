@@ -16,5 +16,8 @@ gateway:
   image: ghcr.io/samyak-b/gateway:0.1.0
   cookieSecure: true                 # the session cookie is only sent over HTTPS
 
+dashboard:
+  image: ghcr.io/samyak-b/dashboard:0.1.0
+
 postgres:
   size: 5Gi

@@ -1,5 +1,5 @@
-# One host for the whole platform: the dashboard API at /api and the team MCP endpoint at /mcp go to the
-# gateway. (The React app at / is added with the dashboard.)
+# One host for the whole platform: the React app at /, the dashboard API at /api and the team MCP endpoint at /mcp.
+# One origin for the app and its API means no CORS, and only one public address to secure.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -25,3 +25,6 @@ spec:
           - path: /mcp
             pathType: Prefix
             backend: { service: { name: gateway, port: { name: http } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: dashboard, port: { name: http } } }

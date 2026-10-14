@@ -33,13 +33,13 @@ TAG := $(shell cat $(TAG_FILE) 2>/dev/null || echo none)
 endif
 
 # image-name:source-dir
-IMAGES := gateway:services/gateway woo-mcp:services/woo-mcp notes-mcp:services/notes-mcp
+IMAGES := gateway:services/gateway woo-mcp:services/woo-mcp notes-mcp:services/notes-mcp dashboard:dashboard
 
 # Local builds: point the charts at the freshly imported images. Prod uses the registry images in values-prod.yaml.
 ifeq ($(ENV),local)
 STORE_IMAGES = --set mcp.image=urumi/woo-mcp:$(TAG)
 NOTES_IMAGES = --set image=urumi/notes-mcp:$(TAG)
-PLATFORM_IMAGES = --set gateway.image=urumi/gateway:$(TAG)
+PLATFORM_IMAGES = --set gateway.image=urumi/gateway:$(TAG) --set dashboard.image=urumi/dashboard:$(TAG)
 endif
 
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m

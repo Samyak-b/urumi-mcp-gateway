@@ -1,0 +1,50 @@
+# The React app as static files in a non-root nginx.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  labels: {{- include "platform.labels" (dict "name" "dashboard" "root" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dashboard
+  template:
+    metadata:
+      labels: {{- include "platform.labels" (dict "name" "dashboard" "root" .) | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: dashboard
+          image: {{ .Values.dashboard.image }}
+          imagePullPolicy: {{ .Values.dashboard.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources: {{- toYaml .Values.dashboard.resources | nindent 12 }}
+          securityContext: {{- include "platform.restricted" . | nindent 12 }}
+          volumeMounts:
+            # nginx writes its pid file and temp files; the root filesystem is read-only.
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+  labels: {{- include "platform.labels" (dict "name" "dashboard" "root" .) | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: dashboard
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

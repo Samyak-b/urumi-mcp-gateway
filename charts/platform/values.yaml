@@ -27,6 +27,13 @@ gateway:
     requests: { cpu: 100m, memory: 160Mi }
     limits: { cpu: 500m, memory: 384Mi }
 
+dashboard:
+  image: urumi/dashboard:dev         # local builds override this with a fresh tag (make deploy)
+  pullPolicy: IfNotPresent
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 96Mi }
+
 postgres:
   image: postgres:16-alpine
   size: 1Gi
