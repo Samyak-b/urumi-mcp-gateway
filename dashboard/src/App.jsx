@@ -4,8 +4,9 @@ import Login from "./pages/Login.jsx";
 import Join from "./pages/Join.jsx";
 import Servers from "./pages/Servers.jsx";
 import Connect from "./pages/Connect.jsx";
+import Team from "./pages/Team.jsx";
 
-const VIEWS = { servers: Servers, connect: Connect };
+const VIEWS = { servers: Servers, connect: Connect, team: Team };
 
 // Pages are chosen by the URL hash (#/servers, #/join/<token>): no router library, and the nginx container only
 // ever serves index.html.
