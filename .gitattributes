@@ -1,0 +1,5 @@
+# Check out text files with LF endings even on Windows. Scripts run in WSL and inside Linux
+# containers, where a CRLF ending breaks them ("bash\r: No such file or directory").
+* text=auto eol=lf
+*.png binary
+*.ico binary

@@ -1,0 +1,17 @@
+# Secrets: never committed. .env holds hand-filled values (LLM key),
+# deploy/secrets/ holds generated passwords and the per-release Helm values built from them.
+.env
+deploy/secrets/
+deploy/.last-tag
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+dist/
+
+# Private working notes
+docs/handoff/
