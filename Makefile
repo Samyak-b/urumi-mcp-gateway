@@ -3,6 +3,8 @@
 #   make tools     check that the required tools are installed and Docker is running
 #   make cluster   create the local k3d cluster (skipped if it exists) and switch kubectl to it
 #   make secrets   generate passwords into deploy/secrets/ (git-ignored); existing ones are kept
+#   make build     build the service images with a fresh tag (remembered in deploy/.last-tag)
+#   make import    copy the built images into the k3d cluster
 #   make lint      helm lint every chart with this environment's values
 #   make deploy    helm upgrade --install every release (waits until ready)
 #   make creds     print the logins (keep them off camera)
@@ -20,9 +22,20 @@ CLUSTER := urumi
 ENV     ?= local
 SECRETS := deploy/secrets
 
+TAG_FILE := deploy/.last-tag
+
+# Every build gets a new tag. Reusing one tag ("dev") would not restart pods after a rebuild, because
+# the Deployment spec would not change. `make deploy` uses the last built tag.
+ifndef TAG
+TAG := $(shell cat $(TAG_FILE) 2>/dev/null || echo none)
+endif
+
+# image-name:source-dir
+IMAGES := woo-mcp:services/woo-mcp
+
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
 
-.PHONY: help tools cluster secrets lint deploy creds status logs-setup down
+.PHONY: help tools cluster secrets build import lint deploy creds status logs-setup down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -44,6 +57,19 @@ down:
 
 secrets:
 	bash scripts/gen-secrets.sh
+
+build:
+	$(eval TAG := local-$(shell date +%s))
+	@for pair in $(IMAGES); do \
+	  name=$${pair%%:*}; dir=$${pair#*:}; \
+	  echo "building urumi/$$name:$(TAG)"; \
+	  docker build -q -t urumi/$$name:$(TAG) $$dir; \
+	done
+	echo $(TAG) > $(TAG_FILE)
+
+# k3d nodes cannot see the host's Docker images; this copies them into the cluster's containerd.
+import:
+	k3d image import -c $(CLUSTER) $(foreach pair,$(IMAGES),urumi/$(firstword $(subst :, ,$(pair))):$(TAG))
 
 lint:
 	helm lint charts/store -f charts/store/values-$(ENV).yaml -f $(SECRETS)/store.yaml
