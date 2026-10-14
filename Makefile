@@ -1,5 +1,6 @@
 # Local Kubernetes workflow. Run from a WSL2 (Ubuntu) shell with Docker Desktop's WSL integration on.
 #
+#   make up        everything from zero: tools, cluster, secrets, build, import, lint, deploy (~10 min)
 #   make tools     check that the required tools are installed and Docker is running
 #   make cluster   create the local k3d cluster (skipped if it exists) and switch kubectl to it
 #   make secrets   generate passwords into deploy/secrets/ (git-ignored); existing ones are kept
@@ -49,7 +50,7 @@ endif
 
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
 
-.PHONY: help tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff smoke test logs-setup down
+.PHONY: help up tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff smoke test logs-setup down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -156,3 +157,6 @@ smoke:
 # Runs in the gateway image, which has every dependency the gateway and the MCP servers need. No cluster needed.
 test:
 	docker run --rm -v "$$PWD:/repo:ro" -w /repo -e HOME=/tmp urumi/gateway:$(TAG) python tests/test_e2e.py
+
+up: tools cluster secrets build import lint deploy
+	@echo; echo "Storefront: http://store.localhost   Dashboard: http://dashboard.localhost   Logins: make creds"
