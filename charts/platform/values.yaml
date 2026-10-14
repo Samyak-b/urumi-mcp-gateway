@@ -45,6 +45,7 @@ dashboard:
 
 postgres:
   image: postgres:16-alpine
+  uid: 70                            # the image's postgres user; the pod runs as it, never as root
   size: 1Gi
   resources:
     requests: { cpu: 50m, memory: 96Mi }

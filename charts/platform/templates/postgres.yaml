@@ -28,9 +28,21 @@ spec:
       labels: {{- include "platform.labels" (dict "name" "postgres" "root" .) | nindent 8 }}
     spec:
       automountServiceAccountToken: false
+      # Non-root from the start, as the image's own postgres user (uid 70 in the alpine image); its entrypoint
+      # only switches users when it starts as root.
+      securityContext:
+        runAsUser: {{ .Values.postgres.uid }}
+        runAsGroup: {{ .Values.postgres.uid }}
+        runAsNonRoot: true
+        fsGroup: {{ .Values.postgres.uid }}        # a new volume is made writable for that group
+        fsGroupChangePolicy: OnRootMismatch        # only the volume's root, once: pgdata must stay 0700
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: postgres
           image: {{ .Values.postgres.image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
           env:
             - { name: POSTGRES_USER, value: gateway }
             - { name: POSTGRES_DB, value: gateway }

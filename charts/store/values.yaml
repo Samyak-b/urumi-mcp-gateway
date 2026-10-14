@@ -22,6 +22,7 @@ storage:
 
 mariadb:
   image: mariadb:11.4
+  uid: 999                         # the image's mysql user; the pod runs as it, never as root
   size: 2Gi
   resources:
     requests: { cpu: 100m, memory: 256Mi }

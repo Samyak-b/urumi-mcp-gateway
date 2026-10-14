@@ -32,9 +32,21 @@ spec:
         checksum/secret: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
     spec:
       automountServiceAccountToken: false   # MariaDB never talks to the Kubernetes API
+      # Non-root from the start. The image's entrypoint would start as root and then switch to its mysql user;
+      # started as that user (uid 999 in the official image) it skips the switch and works the same.
+      securityContext:
+        runAsUser: {{ .Values.mariadb.uid }}
+        runAsGroup: {{ .Values.mariadb.uid }}
+        runAsNonRoot: true
+        fsGroup: {{ .Values.mariadb.uid }}         # a new volume is made writable for that group
+        fsGroupChangePolicy: OnRootMismatch        # only on first mount, not a recursive chown on every start
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: mariadb
           image: {{ .Values.mariadb.image }}
+          securityContext:
+            allowPrivilegeEscalation: false        # it can't become root later (no setuid binaries)
+            capabilities: { drop: ["ALL"] }
           env:
             - name: MARIADB_ROOT_PASSWORD
               valueFrom: { secretKeyRef: { name: store-db, key: root-password } }
