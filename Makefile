@@ -2,6 +2,7 @@
 #
 #   make tools     check that the required tools are installed and Docker is running
 #   make cluster   create the local k3d cluster (skipped if it exists) and switch kubectl to it
+#   make secrets   generate passwords into deploy/secrets/ (git-ignored); existing ones are kept
 #   make down      delete the local cluster (all data goes with it)
 
 SHELL := /bin/bash
@@ -10,7 +11,7 @@ SHELL := /bin/bash
 
 CLUSTER := urumi
 
-.PHONY: help tools cluster down
+.PHONY: help tools cluster secrets down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -29,3 +30,6 @@ cluster:
 
 down:
 	k3d cluster delete $(CLUSTER)
+
+secrets:
+	bash scripts/gen-secrets.sh
