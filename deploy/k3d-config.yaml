@@ -1,0 +1,16 @@
+# Local cluster: k3s (the same distribution a VPS runs) inside Docker, created by `make cluster`.
+# k3s ships what the charts rely on: Traefik as the Ingress controller, the local-path storage class,
+# and a NetworkPolicy controller.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: urumi
+servers: 1
+agents: 0
+ports:
+  # Traefik listens behind k3d's load balancer; publish it on the host so that
+  # http://store.localhost and http://dashboard.localhost reach the Ingress.
+  - port: 80:80
+    nodeFilters: [loadbalancer]
+  - port: 443:443
+    nodeFilters: [loadbalancer]

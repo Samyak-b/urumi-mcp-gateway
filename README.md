@@ -22,4 +22,13 @@ with Docker. All commands run in the WSL shell, from the repository root.
 
 ```bash
 make tools      # checks docker, k3d, kubectl, helm, openssl
+make cluster    # creates the k3d cluster "urumi" and points kubectl at it
 ```
+
+### Local domains
+
+The storefront and the dashboard are served on `store.localhost` and `dashboard.localhost`. Browsers resolve every
+`*.localhost` name to the local machine on their own (RFC 6761), so there is no `/etc/hosts` editing. k3d publishes
+Traefik, the Ingress controller built into k3s, on host ports 80 and 443, and Traefik routes by host name.
+
+For command-line tools that don't resolve `*.localhost` themselves, use `curl --resolve store.localhost:80:127.0.0.1`.

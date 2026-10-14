@@ -1,12 +1,16 @@
 # Local Kubernetes workflow. Run from a WSL2 (Ubuntu) shell with Docker Desktop's WSL integration on.
 #
 #   make tools     check that the required tools are installed and Docker is running
+#   make cluster   create the local k3d cluster (skipped if it exists) and switch kubectl to it
+#   make down      delete the local cluster (all data goes with it)
 
 SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 .DEFAULT_GOAL := help
 
-.PHONY: help tools
+CLUSTER := urumi
+
+.PHONY: help tools cluster down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -17,3 +21,11 @@ tools:
 	done; \
 	docker info >/dev/null 2>&1 || { echo "docker is installed but not running (start Docker Desktop)"; missing=1; }; \
 	exit $$missing
+
+cluster:
+	@k3d cluster list $(CLUSTER) >/dev/null 2>&1 && echo "cluster $(CLUSTER) already exists" \
+	  || k3d cluster create --config deploy/k3d-config.yaml
+	kubectl config use-context k3d-$(CLUSTER)
+
+down:
+	k3d cluster delete $(CLUSTER)
