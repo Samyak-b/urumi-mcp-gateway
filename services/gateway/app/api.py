@@ -3,20 +3,22 @@
 Who may do what:
   admin  - manage servers, invite users, change roles, issue and revoke anyone's keys, see the whole audit log
   member - see servers and their tools, manage their own keys, use the chat, see their own audit rows
+Upstream credentials are write-only: the API accepts them but only ever answers with `has_credential`.
 """
 
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import func, select
 
 from .config import settings
-from .db import ApiKey, Invite, Session, User, aware, utcnow
+from .db import ApiKey, Invite, Server, Session, User, aware, utcnow
 from .security import hash_password, hash_token, new_api_key, verify_password
 
 api = APIRouter(prefix="/api")
@@ -229,5 +231,100 @@ async def revoke_key(key_id: int, user: User = Depends(current_user)):
             raise HTTPException(404, "No such key")  # 404 for someone else's key: don't confirm it exists
         if k.revoked_at is None:
             k.revoked_at = utcnow()  # kept, not deleted, so the audit log can still name the key's owner
+            await db.commit()
+    return {"ok": True}
+
+
+# ---------------- upstream servers ----------------
+
+# Lowercase letters, digits and single hyphens, no underscores: then "__" can only ever be the separator in
+# exposed tool names (woo__list_orders), and splitting on it is unambiguous.
+SLUG = re.compile(r"^[a-z][a-z0-9-]{1,22}$")
+
+
+class ServerIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    slug: str
+    url: str = Field(max_length=500, pattern=r"^https?://")
+    auth_type: Literal["none", "bearer", "header"] = "none"
+    auth_header: str | None = Field(default=None, max_length=100)  # the header's name when auth_type is "header"
+    credential: str | None = Field(default=None, max_length=4000)
+    enabled: bool = True
+
+    @field_validator("slug")
+    @classmethod
+    def _slug(cls, v: str) -> str:
+        if not SLUG.match(v):
+            raise ValueError("2-23 characters: lowercase letters, digits and hyphens, starting with a letter")
+        return v
+
+
+class ServerPatch(BaseModel):
+    name: str | None = Field(default=None, max_length=100)
+    url: str | None = Field(default=None, max_length=500, pattern=r"^https?://")
+    auth_type: Literal["none", "bearer", "header"] | None = None
+    auth_header: str | None = Field(default=None, max_length=100)
+    credential: str | None = Field(default=None, max_length=4000)  # left out = keep the stored one; "" = clear it
+    enabled: bool | None = None
+
+
+def server_out(s: Server, user: User) -> dict:
+    out = {
+        "id": s.id, "slug": s.slug, "name": s.name, "enabled": s.enabled,
+        "status": "disabled" if not s.enabled else s.status,
+        "last_checked_at": s.last_checked_at,
+        "tools": [{"name": f"{s.slug}__{t['name']}", "description": (t.get("description") or "")[:300]} for t in s.tools or []],
+    }
+    if user.role == "admin":
+        # Admins also see where it points and how it authenticates, but never the credential itself.
+        out |= {"url": s.url, "auth_type": s.auth_type, "auth_header": s.auth_header,
+                "has_credential": bool(s.credential), "last_error": s.last_error}
+    return out
+
+
+@api.get("/servers")
+async def list_servers(user: User = Depends(current_user)):
+    async with Session() as db:
+        rows = (await db.scalars(select(Server).order_by(Server.id))).all()
+    return [server_out(s, user) for s in rows]
+
+
+@api.post("/servers")
+async def create_server(body: ServerIn, admin: User = Depends(admin_user)):
+    async with Session() as db:
+        if await db.scalar(select(Server).where(Server.slug == body.slug)):
+            raise HTTPException(409, f"The prefix '{body.slug}' is taken")
+        s = Server(name=body.name, slug=body.slug, url=body.url, auth_type=body.auth_type, auth_header=body.auth_header,
+                   credential=body.credential if body.credential and body.auth_type != "none" else None,
+                   enabled=body.enabled)
+        db.add(s)
+        await db.commit()
+        return server_out(s, admin)
+
+
+@api.patch("/servers/{server_id}")
+async def update_server(server_id: int, body: ServerPatch, admin: User = Depends(admin_user)):
+    async with Session() as db:
+        s = await db.get(Server, server_id)
+        if s is None:
+            raise HTTPException(404, "No such server")
+        for field in ("name", "url", "auth_type", "auth_header", "enabled"):
+            if (value := getattr(body, field)) is not None:
+                setattr(s, field, value)
+        if body.credential is not None:
+            s.credential = body.credential or None
+        if s.auth_type == "none":
+            s.credential = None  # "no authentication" means nothing stored, not an old credential left behind
+        if body.enabled is False:
+            s.status = "unknown"
+        await db.commit()
+        return server_out(s, admin)
+
+
+@api.delete("/servers/{server_id}")
+async def delete_server(server_id: int, _: User = Depends(admin_user)):
+    async with Session() as db:
+        if s := await db.get(Server, server_id):
+            await db.delete(s)
             await db.commit()
     return {"ok": True}
