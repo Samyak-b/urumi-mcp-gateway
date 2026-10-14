@@ -30,6 +30,11 @@ spec:
               valueFrom: { secretKeyRef: { name: gateway-secrets, key: admin-password } }
             - name: SEED_SERVERS
               valueFrom: { secretKeyRef: { name: gateway-secrets, key: seed-servers } }
+            - name: LLM_API_KEY
+              valueFrom: { secretKeyRef: { name: gateway-secrets, key: llm-api-key } }
+            - { name: LLM_BASE_URL, value: {{ .Values.gateway.llm.baseUrl | quote }} }
+            - { name: LLM_MODEL, value: {{ .Values.gateway.llm.model | quote }} }
+            - { name: STORE_TIMEZONE, value: {{ .Values.gateway.storeTimezone | quote }} }
             - { name: ADMIN_EMAIL, value: {{ .Values.gateway.adminEmail | quote }} }
             - { name: PUBLIC_URL, value: {{ .Values.publicUrl | quote }} }
             - { name: COOKIE_SECURE, value: {{ .Values.gateway.cookieSecure | quote }} }

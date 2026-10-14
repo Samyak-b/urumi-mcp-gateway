@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import func, select
 
-from . import health
+from . import chat, health
 from .config import settings
 from .db import ApiKey, AuditLog, Invite, Server, Session, User, aware, utcnow
 from .security import hash_password, hash_token, new_api_key, verify_password
@@ -81,7 +81,9 @@ async def logout(request: Request):
 
 @api.get("/me")
 async def me(user: User = Depends(current_user)):
-    return {"user": user_out(user), "mcp_url": settings().public_url.rstrip("/") + "/mcp"}
+    cfg = settings()
+    return {"user": user_out(user), "mcp_url": cfg.public_url.rstrip("/") + "/mcp",
+            "chat_configured": bool(cfg.llm_base_url and cfg.llm_api_key and cfg.llm_model)}
 
 
 # ---------------- invites and users ----------------
@@ -369,3 +371,18 @@ async def audit_log(
         rows = (await db.scalars(q)).all()
     return [{"id": r.id, "ts": r.ts, "user_email": r.user_email, "via": r.via, "server": r.server_slug, "tool": r.tool,
              "duration_ms": r.duration_ms, "outcome": r.outcome, "detail": r.detail} for r in rows]
+
+
+# ---------------- chat ----------------
+
+class ChatIn(BaseModel):
+    messages: list[dict[str, str]] = Field(min_length=1, max_length=40)
+
+
+@api.post("/chat")
+async def chat_endpoint(body: ChatIn, user: User = Depends(current_user)):
+    # The agent acts as the signed-in user (from the session cookie): its tool calls are audited under them.
+    try:
+        return await chat.run(user, body.messages)
+    except chat.ChatUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
