@@ -1,0 +1,3 @@
+# Local k3d cluster: plain HTTP on *.localhost.
+host: dashboard.localhost
+publicUrl: http://dashboard.localhost

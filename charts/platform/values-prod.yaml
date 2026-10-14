@@ -1,0 +1,20 @@
+# Production-like VPS (k3s): a real domain, TLS from cert-manager, registry images, secure cookies.
+host: app.example.com
+publicUrl: https://app.example.com
+
+ingress:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+  tls:
+    enabled: true
+    secretName: dashboard-tls
+
+storage:
+  className: local-path
+
+gateway:
+  image: ghcr.io/samyak-b/gateway:0.1.0
+  cookieSecure: true                 # the session cookie is only sent over HTTPS
+
+postgres:
+  size: 5Gi

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: platform
+description: The team MCP gateway (API + MCP endpoint), its Postgres database and the React dashboard.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

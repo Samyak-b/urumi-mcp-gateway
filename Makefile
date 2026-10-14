@@ -33,12 +33,13 @@ TAG := $(shell cat $(TAG_FILE) 2>/dev/null || echo none)
 endif
 
 # image-name:source-dir
-IMAGES := woo-mcp:services/woo-mcp notes-mcp:services/notes-mcp
+IMAGES := gateway:services/gateway woo-mcp:services/woo-mcp notes-mcp:services/notes-mcp
 
 # Local builds: point the charts at the freshly imported images. Prod uses the registry images in values-prod.yaml.
 ifeq ($(ENV),local)
 STORE_IMAGES = --set mcp.image=urumi/woo-mcp:$(TAG)
 NOTES_IMAGES = --set image=urumi/notes-mcp:$(TAG)
+PLATFORM_IMAGES = --set gateway.image=urumi/gateway:$(TAG)
 endif
 
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
@@ -82,6 +83,7 @@ import:
 lint:
 	helm lint charts/store     -f charts/store/values-$(ENV).yaml     -f $(SECRETS)/store.yaml
 	helm lint charts/notes-mcp -f charts/notes-mcp/values-$(ENV).yaml -f $(SECRETS)/notes.yaml
+	helm lint charts/platform  -f charts/platform/values-$(ENV).yaml  -f $(SECRETS)/platform.yaml
 
 deploy:
 	@[ "$(ENV)" != local ] || [ "$(TAG)" != none ] || { echo "no images built yet: run make build import first"; exit 1; }
@@ -89,14 +91,19 @@ deploy:
 	  -f charts/store/values-$(ENV).yaml -f $(SECRETS)/store.yaml $(STORE_IMAGES)
 	$(HELM_DEPLOY) notes charts/notes-mcp -n tools \
 	  -f charts/notes-mcp/values-$(ENV).yaml -f $(SECRETS)/notes.yaml $(NOTES_IMAGES)
+	$(HELM_DEPLOY) platform charts/platform -n platform \
+	  -f charts/platform/values-$(ENV).yaml -f $(SECRETS)/platform.yaml $(PLATFORM_IMAGES)
 
 creds:
-	@source <(grep -E '^STORE_ADMIN_PASSWORD=' $(SECRETS)/generated.env); \
+	@source <(grep -E '^(STORE_ADMIN_PASSWORD|GATEWAY_ADMIN_PASSWORD)=' $(SECRETS)/generated.env); \
+	email=$$(sed -n 's/^ADMIN_EMAIL=//p' .env 2>/dev/null | tr -d '\r' || true); \
+	echo "Dashboard  http://dashboard.localhost        $${email:-admin@example.com} / $$GATEWAY_ADMIN_PASSWORD"; \
 	echo "WordPress  http://store.localhost/wp-admin   admin / $$STORE_ADMIN_PASSWORD"
 
 status:
 	kubectl get pods,svc,ingress,pvc,networkpolicy -n store
 	kubectl get pods,svc,networkpolicy -n tools
+	kubectl get pods,svc,ingress,pvc,networkpolicy -n platform
 
 logs-setup:
 	kubectl -n store logs job/store-setup -f

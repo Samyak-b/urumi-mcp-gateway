@@ -1,0 +1,27 @@
+# One host for the whole platform: the dashboard API at /api and the team MCP endpoint at /mcp go to the
+# gateway. (The React app at / is added with the dashboard.)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dashboard
+  labels: {{- include "platform.labels" (dict "name" "gateway" "root" .) | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.host | quote }}]
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.host | quote }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend: { service: { name: gateway, port: { name: http } } }
+          - path: /mcp
+            pathType: Prefix
+            backend: { service: { name: gateway, port: { name: http } } }
