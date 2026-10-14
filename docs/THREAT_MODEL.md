@@ -17,10 +17,14 @@ other workloads in the cluster.
 ## 1. Shared upstream credentials: what a member can do with a credential they never see
 
 Every member's calls to a server use **that server's one credential**, which the gateway adds on its side
-(`upstream.UpstreamTarget.from_server`). So a member can do through the gateway **everything that credential
-allows on every enabled server**. For woo that is WooCommerce's `read_write` API key: list and create products,
-read orders with customer contact details, change order status. In this version there is no per-role or per-user
-restriction on tools; restricting write tools to admins is the next step (assignment stand-out #2).
+(`upstream.UpstreamTarget.from_server`). The credential itself can do everything it allows: for woo that is
+WooCommerce's `read_write` API key (list and create products, read orders with customer contact details, change
+order status). What a member can do with it is narrowed by **tool permissions**: an admin marks tools as
+admin-only, and a member is neither listed them nor allowed to call them (`router.routable_tools`,
+`router.call_tool`, audited as `denied`). A fresh install marks woo's `create_product` and `update_order_status`
+admin-only, so members read products and orders but don't change the store. Everything else a server offers, a
+member can use, within what the credential allows. The limit is per tool, not per argument: a member allowed
+`list_orders` sees every order and its customer details.
 
 What a member **cannot** do with it:
 
@@ -68,10 +72,11 @@ What limits it:
 | **A bounded loop.** At most 8 LLM steps per chat message | `chat_max_steps` |
 | **Quick removal.** An admin can disable a server; its tools leave every list and further calls are refused at once | `api.update_server`, `router.call_tool` |
 | **Only admins add servers** | `admin_user` dependency |
+| **Tool permissions.** Tools that change the store are admin-only by default, so a member's model (in the chat or their own client) isn't even offered them | `router.routable_tools` |
 
-What it does **not** fully prevent: a model can still be persuaded by text it reads, and in this version write
-tools (create product, change order status) are available to any member's model. A malicious server also sees
-every argument sent to its own tools, and can return false data.
+What it does **not** fully prevent: a model can still be persuaded by text it reads, and it can use every tool
+its user may use, write tools included for an admin. A malicious server also sees every argument sent to its own
+tools, and can return false data.
 
 **If an admin adds a malicious or compromised server**, it can: return manipulative descriptions and results (above);
 see the arguments of calls to its own tools; and, because there is no SSRF guard yet, an admin could point the
@@ -79,21 +84,22 @@ gateway at internal addresses (anything the gateway pod can reach, which Network
 not elsewhere in the cluster or on the internet). It can **not**: obtain other servers' credentials (each is added
 only to requests to its own server); obtain users' gateway keys (never passed through); read the gateway's database
 or the store's database directly; or act outside the tools it defines. Next steps: an SSRF guard on the URLs admins
-register (no metadata or private addresses outside the cluster's MCP services), admin-only write tools, and
-default-deny outgoing traffic.
+register (no metadata or private addresses outside the cluster's MCP services) and default-deny outgoing traffic.
+Its tools can also be made admin-only one by one while it is investigated, instead of disabling the whole server.
 
 ## 4. What one team member can do to another
 
 | A member can… | A member cannot… |
 |---|---|
-| use every tool of every enabled server, with that server's shared credential | see, revoke or use another member's keys (others' keys are 404 to them) |
-| change shared state through those tools: create products, change any order's status, delete any team note | see another member's audit rows or chat conversations |
-| make the gateway call upstreams on their behalf as often as they like (no rate limit yet), using shared upstream capacity | add, edit, disable or remove servers, invite people, change roles or disable users (admin only, HTTP 403) |
+| use every tool of every enabled server that isn't admin-only, with that server's shared credential | see, revoke or use another member's keys (others' keys are 404 to them) |
+| change shared state through the tools left open to members: by default add or delete any team note (woo's write tools are admin-only) | create products or change order status, while those tools are admin-only (not listed; a direct call is `denied` and audited) |
+| make the gateway call upstreams on their behalf as often as they like (no rate limit yet), using shared upstream capacity | see another member's audit rows or chat conversations |
+| | add, edit, disable or remove servers, change which tools are admin-only, invite people, change roles or disable users (admin only, HTTP 403) |
 | | see upstream URLs, credentials or connection errors |
 
-So members are isolated from each other's **identity** (keys, sessions, audit view) but not from each other's
-**data**: the store and the notes are shared resources, and a member can change what another member relies on. The
-audit log records who did it. Admins can do more, by design: they see everyone's audit rows, can issue a key for
+So members are isolated from each other's **identity** (keys, sessions, audit view) but not entirely from each
+other's **data**: the notes are a shared resource a member can change, and so is any store tool an admin opens to
+members. Tool permissions decide where that line is. The audit log records who did what. Admins can do more, by design: they see everyone's audit rows, can issue a key for
 another user (the key's `created_by` records the admin) and can disable anyone but themselves.
 
 ## Other threats handled
@@ -113,6 +119,7 @@ another user (the key's `created_by` records the admin) and can disable anyone b
 
 ## Known gaps
 
-Plain-text upstream credentials in Postgres; no SSRF guard; no per-role tool restrictions; no rate limits; outgoing
+Plain-text upstream credentials in Postgres; no SSRF guard; tool permissions are per role and per tool (not per
+user, not per argument); no rate limits; outgoing
 traffic unrestricted; WordPress, MariaDB and Postgres run as root; requests with unknown keys are rejected but not
 audited. Each is listed with its consequence above or in DESIGN.md.

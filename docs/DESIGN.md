@@ -52,7 +52,8 @@ Claude Code asks for `woo__list_orders` with `{"period": "today"}`:
    user gets HTTP 401 before any MCP processing; the last two are audited as `rejected` under the key's owner.
 3. The key's owner is put in a ContextVar and the request goes to the MCP SDK, which calls our `call_tool` handler.
 4. `router.call_tool` splits the name on the first `__`: server `woo`, tool `list_orders`. It re-checks that the
-   server exists, is enabled and has that tool (a client may still hold an old list), or answers `denied`.
+   server exists, is enabled and has that tool (a client may still hold an old list), and that the tool isn't
+   admin-only for a member, or answers `denied`.
 5. `upstream.call` builds the request with **woo's own credential** from the database (the client's key goes no
    further), opens an MCP session to `http://woo-mcp.store.svc.cluster.local:8000/mcp` and calls the tool, all under a
    30 s deadline. Redirects are not followed, so the credential can't be carried to another host.
@@ -76,6 +77,13 @@ list `routable_tools(user)` gives `/mcp`, and runs each tool call the LLM asks f
   characters clients accept and to 64 characters (a long name gets a 6-character hash so it stays unique).
   `make test` checks two colliding `search` tools.
 - **Routing:** by prefix to the server, then by exposed name to the upstream's real tool name.
+- **Tool permissions:** an admin can mark any tool admin-only (table `admin_only_tools`, one row per server and
+  tool; the Servers page toggles it). For a member, `routable_tools` leaves those tools out, so neither their MCP
+  client nor their chat is offered them, and `call_tool` refuses a direct call (`denied`, "admins only"). The check
+  is in the two functions every call already goes through, so the two front doors can't disagree. Per role and per
+  tool: woo's `create_product` and `update_order_status` start admin-only (a seed setting), so members read orders
+  but don't change the store. Per-user grants or per-argument rules (only your own orders) would need more than a
+  list; the role check is where they would plug in.
 - **Upstream descriptions are capped at 1,024 characters**: they are text from a server we don't control, and they
   go straight to the model (see THREAT_MODEL.md).
 

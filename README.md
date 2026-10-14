@@ -107,6 +107,11 @@ OpenAI-compatible endpoint with tool calling), then `make secrets deploy`.
 of every server; admins add a server by URL with an optional bearer token or custom header, edit, disable or
 remove it.
 
+**Tool permissions.** On the Servers page an admin clicks a tool to make it **admins only** (🔒) or open it to
+members again. A member's MCP client and chat aren't offered locked tools, and calling one directly is refused and
+audited as `denied`. A fresh install locks WooCommerce's `create_product` and `update_order_status`: members can
+read products and orders, only admins change the store.
+
 ## Checks and tests
 
 | Command | What it shows |
@@ -215,4 +220,5 @@ and after.
 
 | Item | What it does | Where | How to see it |
 |---|---|---|---|
+| #2 Tool permissions | Admin-only tools per server: hidden from members' tool lists (MCP and chat) and refused if called directly; WooCommerce's write tools locked by default | `services/gateway/app/router.py` (`routable_tools`, `call_tool`), `db.py` (`AdminOnlyTool`), `api.py`, `dashboard/src/pages/Servers.jsx`, [Tool permissions](#using-it) | Servers page: click a tool to lock it, then list tools as a member; `make test`, `make smoke` |
 | #9 Upgrades and rollback | Automatic rollback of a failed upgrade, `make history` / `make rollback`, database backups, the rules that make a rollback safe | `Makefile` (`HELM_DEPLOY`, `rollback`, `backup`), `scripts/rollback-check.sh`, [Upgrades and rollback](#upgrades-and-rollback) | `make rollback-check` |
