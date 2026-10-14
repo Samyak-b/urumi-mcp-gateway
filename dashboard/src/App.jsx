@@ -5,8 +5,9 @@ import Join from "./pages/Join.jsx";
 import Servers from "./pages/Servers.jsx";
 import Connect from "./pages/Connect.jsx";
 import Team from "./pages/Team.jsx";
+import Audit from "./pages/Audit.jsx";
 
-const VIEWS = { servers: Servers, connect: Connect, team: Team };
+const VIEWS = { servers: Servers, connect: Connect, team: Team, audit: Audit };
 
 // Pages are chosen by the URL hash (#/servers, #/join/<token>): no router library, and the nginx container only
 // ever serves index.html.
@@ -73,5 +74,5 @@ export default function App() {
 
 function Page({ id, me }) {
   const View = VIEWS[id];
-  return View ? <View me={me} /> : <p className="muted">The {id} page is coming next.</p>;
+  return <View me={me} />;
 }
