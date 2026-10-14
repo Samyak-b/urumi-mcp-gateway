@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from starlette.middleware.sessions import SessionMiddleware
 
+from . import health
 from .api import api
 from .config import settings
 from .db import Server, Session, User, init_db, ping_db, wait_for_db
@@ -19,6 +20,8 @@ from .security import hash_password
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("gateway")
+for noisy in ("httpx", "mcp.client.streamable_http", "mcp.server.streamable_http", "mcp.server.lowlevel.server"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)  # one line per upstream request would drown the log
 
 
 async def bootstrap() -> None:
@@ -49,7 +52,9 @@ async def lifespan(_: FastAPI):
     await wait_for_db()
     await init_db()
     await bootstrap()
+    checks = asyncio.create_task(health.loop())
     yield
+    checks.cancel()
 
 
 if not settings().session_secret:

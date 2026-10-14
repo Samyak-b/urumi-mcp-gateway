@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import func, select
 
+from . import health
 from .config import settings
 from .db import ApiKey, Invite, Server, Session, User, aware, utcnow
 from .security import hash_password, hash_token, new_api_key, verify_password
@@ -299,7 +300,22 @@ async def create_server(body: ServerIn, admin: User = Depends(admin_user)):
                    enabled=body.enabled)
         db.add(s)
         await db.commit()
+    return await _checked(s.id, admin)
+
+
+async def _checked(server_id: int, admin: User) -> dict:
+    """Check the server right away, so the admin sees Connected or the reason it isn't, not a 10 s wait."""
+    await health.refresh_server(server_id)
+    async with Session() as db:
+        s = await db.get(Server, server_id)
+        if s is None:
+            raise HTTPException(404, "No such server")
         return server_out(s, admin)
+
+
+@api.post("/servers/{server_id}/refresh")
+async def refresh_server(server_id: int, admin: User = Depends(admin_user)):
+    return await _checked(server_id, admin)
 
 
 @api.patch("/servers/{server_id}")
@@ -318,7 +334,7 @@ async def update_server(server_id: int, body: ServerPatch, admin: User = Depends
         if body.enabled is False:
             s.status = "unknown"
         await db.commit()
-        return server_out(s, admin)
+    return await _checked(server_id, admin)
 
 
 @api.delete("/servers/{server_id}")
