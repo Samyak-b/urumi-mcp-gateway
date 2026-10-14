@@ -1,0 +1,18 @@
+# Production-like VPS (k3s): a real domain, TLS from cert-manager, bigger volumes.
+# Only values change between environments; the templates are the same.
+store:
+  host: store.example.com
+  url: https://store.example.com
+
+ingress:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+  tls:
+    enabled: true
+    secretName: store-tls
+
+storage:
+  className: local-path            # k3s default; use a cloud or replicated class if the VPS has one
+
+mariadb:
+  size: 10Gi

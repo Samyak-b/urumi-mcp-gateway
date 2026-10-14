@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+  labels: {{- include "store.labels" (dict "name" "mariadb" "root" .) | nindent 4 }}
+spec:
+  clusterIP: None   # headless: "mariadb" resolves straight to the StatefulSet pod
+  selector:
+    app.kubernetes.io/name: mariadb
+  ports:
+    - name: mysql
+      port: 3306
+---
+# A StatefulSet, not a Deployment: the pod keeps a stable name (mariadb-0) and its own volume
+# (data-mariadb-0) across restarts and rescheduling.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mariadb
+  labels: {{- include "store.labels" (dict "name" "mariadb" "root" .) | nindent 4 }}
+spec:
+  serviceName: mariadb
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mariadb
+  template:
+    metadata:
+      labels: {{- include "store.labels" (dict "name" "mariadb" "root" .) | nindent 8 }}
+      annotations:
+        # Restart the pod when the Secret changes (the image only reads it on first start anyway).
+        checksum/secret: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false   # MariaDB never talks to the Kubernetes API
+      containers:
+        - name: mariadb
+          image: {{ .Values.mariadb.image }}
+          env:
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: store-db, key: root-password } }
+            - { name: MARIADB_DATABASE, value: wordpress }
+            - { name: MARIADB_USER, value: wordpress }
+            - name: MARIADB_PASSWORD
+              valueFrom: { secretKeyRef: { name: store-db, key: password } }
+          ports:
+            - { name: mysql, containerPort: 3306 }
+          # healthcheck.sh ships with the image and logs in as its own local healthcheck user.
+          readinessProbe:
+            exec: { command: ["healthcheck.sh", "--connect", "--innodb_initialized"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec: { command: ["healthcheck.sh", "--connect"] }
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources: {{- toYaml .Values.mariadb.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/mysql }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- include "store.storageClass" . | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.mariadb.size }}

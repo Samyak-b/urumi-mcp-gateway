@@ -3,15 +3,24 @@
 #   make tools     check that the required tools are installed and Docker is running
 #   make cluster   create the local k3d cluster (skipped if it exists) and switch kubectl to it
 #   make secrets   generate passwords into deploy/secrets/ (git-ignored); existing ones are kept
+#   make lint      helm lint every chart with this environment's values
+#   make deploy    helm upgrade --install every release (waits until ready)
+#   make status    pods, services, ingresses, volumes in the project namespaces
 #   make down      delete the local cluster (all data goes with it)
+#
+# ENV=prod switches to the charts' values-prod.yaml files.
 
 SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 .DEFAULT_GOAL := help
 
 CLUSTER := urumi
+ENV     ?= local
+SECRETS := deploy/secrets
 
-.PHONY: help tools cluster secrets down
+HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
+
+.PHONY: help tools cluster secrets lint deploy status down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -33,3 +42,12 @@ down:
 
 secrets:
 	bash scripts/gen-secrets.sh
+
+lint:
+	helm lint charts/store -f charts/store/values-$(ENV).yaml -f $(SECRETS)/store.yaml
+
+deploy:
+	$(HELM_DEPLOY) store charts/store -n store -f charts/store/values-$(ENV).yaml -f $(SECRETS)/store.yaml
+
+status:
+	kubectl get pods,svc,ingress,pvc -n store

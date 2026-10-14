@@ -1,0 +1,4 @@
+# Local k3d cluster: plain HTTP on *.localhost, small volumes on local-path.
+store:
+  host: store.localhost
+  url: http://store.localhost
