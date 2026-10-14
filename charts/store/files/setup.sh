@@ -63,6 +63,23 @@ wp option update show_on_front page
 wp option update page_on_front "$(wp option get woocommerce_shop_page_id)"
 wp rewrite flush
 
+log "registering the MCP server's REST API key"
+# WooCommerce keeps API keys in its own table: the consumer key as an HMAC hash, the secret as is.
+# Delete and re-insert, so rotating the key is: change the Secret, then helm upgrade.
+wp eval '
+  global $wpdb;
+  $t = $wpdb->prefix . "woocommerce_api_keys";
+  $ck = getenv("WOO_CONSUMER_KEY");
+  $user = get_user_by("login", getenv("WP_ADMIN_USER"));
+  $wpdb->delete($t, array("description" => "mcp-server"));
+  $ok = $wpdb->insert($t, array(
+    "user_id" => $user->ID, "description" => "mcp-server", "permissions" => "read_write",
+    "consumer_key" => wc_api_hash($ck), "consumer_secret" => getenv("WOO_CONSUMER_SECRET"),
+    "truncated_key" => substr($ck, -7),
+  ));
+  if (!$ok) { fwrite(STDERR, "could not insert the API key\n"); exit(1); }
+'
+
 if [ "${SAMPLE_PRODUCTS:-true}" = "true" ] && [ "$(wp post list --post_type=product --format=count)" = "0" ]; then
   log "creating sample products"
   wp wc product create --name="Canvas Tote Bag" --regular_price="18.00" --status=publish >/dev/null

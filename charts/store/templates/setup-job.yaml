@@ -54,6 +54,10 @@ spec:
               valueFrom: { secretKeyRef: { name: store-admin, key: password } }
             - { name: WC_VERSION, value: {{ .Values.setup.wooCommerceVersion | quote }} }
             - { name: SAMPLE_PRODUCTS, value: {{ .Values.setup.sampleProducts | quote }} }
+            - name: WOO_CONSUMER_KEY
+              valueFrom: { secretKeyRef: { name: store-mcp, key: consumer-key } }
+            - name: WOO_CONSUMER_SECRET
+              valueFrom: { secretKeyRef: { name: store-mcp, key: consumer-secret } }
           resources: {{- toYaml .Values.setup.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false

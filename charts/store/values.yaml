@@ -47,3 +47,6 @@ secrets:
   dbRootPassword: ""
   dbPassword: ""
   adminPassword: ""
+  wooConsumerKey: ""               # must start with ck_
+  wooConsumerSecret: ""            # must start with cs_
+  mcpToken: ""                     # the gateway presents this to the MCP server

@@ -23,6 +23,11 @@ rand() { openssl rand -hex 24; }
 ensure STORE_DB_ROOT_PASSWORD "$(rand)"
 ensure STORE_DB_PASSWORD "$(rand)"
 ensure STORE_ADMIN_PASSWORD "$(rand)"
+# WooCommerce REST API key for the MCP server (WooCommerce requires the ck_/cs_ prefixes).
+ensure WOO_CONSUMER_KEY "ck_$(openssl rand -hex 20)"
+ensure WOO_CONSUMER_SECRET "cs_$(openssl rand -hex 20)"
+# Shared token: the MCP server checks it, the gateway presents it.
+ensure WOO_MCP_TOKEN "$(rand)"
 
 # Read KEY=VALUE lines without executing the file: a generated or hand-edited file is data, not a script.
 load() {
@@ -43,6 +48,9 @@ secrets:
   dbRootPassword: $(q "$STORE_DB_ROOT_PASSWORD")
   dbPassword: $(q "$STORE_DB_PASSWORD")
   adminPassword: $(q "$STORE_ADMIN_PASSWORD")
+  wooConsumerKey: $(q "$WOO_CONSUMER_KEY")
+  wooConsumerSecret: $(q "$WOO_CONSUMER_SECRET")
+  mcpToken: $(q "$WOO_MCP_TOKEN")
 EOF
 
 echo "secrets ready in $OUT/ (generated.env keeps the values; re-running keeps them)"
