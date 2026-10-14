@@ -41,6 +41,7 @@ spec:
             - { name: UPSTREAM_CALL_TIMEOUT_S, value: {{ .Values.gateway.upstreamCallTimeoutSeconds | quote }} }
             - { name: UPSTREAM_PROBE_TIMEOUT_S, value: {{ .Values.gateway.upstreamProbeTimeoutSeconds | quote }} }
             - { name: HEALTH_INTERVAL_S, value: {{ .Values.gateway.healthIntervalSeconds | quote }} }
+            - { name: INTERNAL_UPSTREAM_HOSTS, value: {{ join "," .Values.gateway.internalUpstreamHosts | quote }} }
           ports:
             - { name: http, containerPort: 8000 }
           readinessProbe:

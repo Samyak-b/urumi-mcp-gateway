@@ -42,6 +42,8 @@ os.environ.update({
     "DATABASE_URL": f"sqlite+aiosqlite:///{tempfile.mkdtemp()}/gateway.db",
     "SESSION_SECRET": "test-session-secret", "ADMIN_EMAIL": "admin@example.com", "ADMIN_PASSWORD": ADMIN_PASSWORD,
     "PUBLIC_URL": URL["gateway"], "HEALTH_INTERVAL_S": "1", "UPSTREAM_CALL_TIMEOUT_S": "3",
+    # The test's MCP servers listen on 127.0.0.1, which the SSRF guard refuses unless listed (as in-cluster services are).
+    "INTERNAL_UPSTREAM_HOSTS": "127.0.0.1",
     "LLM_BASE_URL": URL["llm"] + "/v1", "LLM_MODEL": "scripted", "LLM_API_KEY": "llm-secret-3333",
     "SEED_SERVERS": json.dumps([
         {"slug": "woo", "name": "WooCommerce store", "url": URL["woo"] + "/mcp", "auth_type": "bearer", "credential": WOO_TOKEN,
@@ -217,6 +219,30 @@ async def main() -> int:
     member_servers = await member.json("GET", "/servers")
     check("members don't see server URLs or auth settings", all("url" not in s and "auth_type" not in s for s in member_servers))
     check("members can't manage servers", (await member.http.post("/servers", json={"name": "x", "slug": "xx", "url": "http://x/mcp"})).status_code == 403)
+
+    print("\n== SSRF guard: admins can't point the gateway at internal addresses")
+    notes_port = PORTS["notes"]
+    for label, url in [("cloud metadata", "http://169.254.169.254/latest/meta-data/"),
+                       ("localhost (the notes server, by a name not on the list)", f"http://localhost:{notes_port}/mcp"),
+                       ("127.0.0.1 written as one number", f"http://2130706433:{notes_port}/mcp"),
+                       ("loopback inside an IPv6 address", f"http://[::ffff:127.0.0.1]:{notes_port}/mcp"),
+                       ("a private network", "http://10.0.0.1/mcp")]:
+        r = await admin.http.post("/servers", json={"name": "x", "slug": "ssrf-test", "url": url})
+        check(f"refused: {label}", r.status_code == 400 and "internal address" in r.text, f"HTTP {r.status_code}")
+    woo_url_before = next(s for s in await admin.json("GET", "/servers") if s["slug"] == "woo")["url"]
+    r = await admin.http.patch(f"/servers/{woo_id}", json={"url": "http://169.254.169.254/mcp"})
+    after = next(s for s in await admin.json("GET", "/servers") if s["slug"] == "woo")["url"]
+    check("editing a server's URL to an internal address is refused too", r.status_code == 400 and after == woo_url_before)
+    # A URL already in the database (or a name whose DNS changes later) is checked again before connecting.
+    from app.db import Server, Session  # noqa: E402 - the gateway runs in this process
+    async with Session() as db:
+        db.add(Server(slug="sneaky", name="Sneaky", url=f"http://localhost:{notes_port}/mcp"))
+        await db.commit()
+    s = await wait_status(admin, "sneaky", "unreachable")
+    check("an internal URL that got into the database is still never connected to", "blocked" in (s.get("last_error") or ""),
+          (s.get("last_error") or "")[:70])
+    check("and its tools are never listed", not any(t.startswith("sneaky__") for t in await names(admin_key)))
+    await admin.json("DELETE", f"/servers/{s['id']}")
 
     print("\n== the chat agent acts as the signed-in user")
     reply = await admin.json("POST", "/chat", {"messages": [{"role": "user", "content": "Create a product called Linen Apron for 24.00"}]})

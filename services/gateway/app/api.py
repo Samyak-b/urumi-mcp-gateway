@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import delete, func, select
 
-from . import chat, health
+from . import chat, health, ssrf
 from .config import settings
 from .db import AdminOnlyTool, ApiKey, AuditLog, Invite, Server, Session, User, aware, utcnow
 from .router import admin_only_tools
@@ -307,8 +307,17 @@ async def list_servers(user: User = Depends(current_user)):
     return [server_out(s, user, locked) for s in rows]
 
 
+async def _guard(url: str) -> None:
+    """SSRF guard on the URL an admin enters (ssrf.py); checked again before every connection."""
+    try:
+        await ssrf.check(url)
+    except ssrf.BlockedURL as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @api.post("/servers")
 async def create_server(body: ServerIn, admin: User = Depends(admin_user)):
+    await _guard(body.url)
     async with Session() as db:
         if await db.scalar(select(Server).where(Server.slug == body.slug)):
             raise HTTPException(409, f"The prefix '{body.slug}' is taken")
@@ -339,6 +348,8 @@ async def refresh_server(server_id: int, admin: User = Depends(admin_user)):
 
 @api.patch("/servers/{server_id}")
 async def update_server(server_id: int, body: ServerPatch, admin: User = Depends(admin_user)):
+    if body.url is not None:
+        await _guard(body.url)
     async with Session() as db:
         s = await db.get(Server, server_id)
         if s is None:

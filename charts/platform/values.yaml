@@ -23,7 +23,12 @@ gateway:
   upstreamCallTimeoutSeconds: 30
   upstreamProbeTimeoutSeconds: 5
   healthIntervalSeconds: 10
-  storeTimezone: UTC                 # the chat agent's idea of "today"; keep it equal to the store's timezone
+  # SSRF guard: upstream URLs may not point at internal addresses (metadata, localhost, private networks, other
+  # cluster services), except these host names: our own in-cluster MCP services. Not editable from the dashboard.
+  internalUpstreamHosts:
+    - woo-mcp.store.svc.cluster.local
+    - notes-mcp.tools.svc.cluster.local
+  storeTimezone: UTC                # the chat agent's idea of "today"; keep it equal to the store's timezone
   llm:                               # the chat agent's model: any OpenAI-compatible endpoint with tool calling
     baseUrl: ""                      # e.g. https://provider.example/v1 (make secrets copies it from .env)
     model: ""

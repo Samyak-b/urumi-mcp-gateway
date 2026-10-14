@@ -22,6 +22,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import McpError
 from mcp.types import CallToolResult
 
+from . import ssrf
 from .config import settings
 
 
@@ -87,6 +88,11 @@ def _describe(exc: BaseException) -> str:
 
 
 async def _run(t: UpstreamTarget, timeout: float, op):
+    # The SSRF guard before every connection, not only when the URL was saved: DNS can change after that.
+    try:
+        await ssrf.check(t.url)
+    except ssrf.BlockedURL as exc:
+        raise UpstreamError("error", f"'{t.slug}' is blocked: {exc}") from exc
     try:
         async with asyncio.timeout(timeout):
             async with _session(t, timeout) as s:

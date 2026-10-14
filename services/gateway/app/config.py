@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     upstream_call_timeout_s: float = 30.0  # one tool call
     upstream_probe_timeout_s: float = 5.0  # one health check (connect + list tools)
     health_interval_s: float = 10.0
+    # SSRF guard (ssrf.py): the only host names an upstream URL may use to reach an internal address. Comma-separated;
+    # set from Helm values, so dashboard admins can't change it.
+    internal_upstream_hosts: str = ""
 
     # JSON list of servers to register on first start. It holds credentials, so it comes from a Secret.
     seed_servers: str = "[]"
