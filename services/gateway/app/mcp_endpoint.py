@@ -13,6 +13,7 @@ The client's own key is never forwarded upstream.
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 
 from mcp.server.lowlevel import Server
@@ -21,7 +22,7 @@ from mcp.types import Tool
 from sqlalchemy import select
 from starlette.responses import JSONResponse
 
-from . import router
+from . import audit, router
 from .config import settings
 from .db import ApiKey, Session, User, utcnow
 from .security import hash_token
@@ -74,6 +75,20 @@ async def authenticate_key(token: str) -> tuple[User | None, str]:
         return user, ""
 
 
+def _attempted(body: bytes) -> str | None:
+    """For the audit row of a refused request: the tool it tried to call, or the MCP method."""
+    try:
+        msg = json.loads(body)
+        for m in msg if isinstance(msg, list) else [msg]:
+            if m.get("method") == "tools/call":
+                return (m.get("params") or {}).get("name")
+            if m.get("method"):
+                return m["method"]
+    except (ValueError, AttributeError):
+        pass
+    return None
+
+
 async def _read_body(receive, limit: int) -> bytes | None:
     body, more = b"", True
     while more:
@@ -102,6 +117,10 @@ async def mcp_asgi(scope, receive, send):
 
     user, reason = await authenticate_key(auth[7:].strip())
     if reason:
+        # A revoked key or a disabled user: we know whose key it is, so the attempt is audited under them.
+        # A key we have never seen has no owner to attribute it to; it only gets the 401.
+        if user is not None:
+            await audit.record(user, "mcp", None, _attempted(body), 0, "rejected", reason)
         return await JSONResponse({"error": reason}, status_code=401, headers={"WWW-Authenticate": "Bearer"})(scope, receive, send)
 
     # We consumed the body to check its size; hand it to the MCP transport again.

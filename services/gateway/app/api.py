@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 
 from . import health
 from .config import settings
-from .db import ApiKey, Invite, Server, Session, User, aware, utcnow
+from .db import ApiKey, AuditLog, Invite, Server, Session, User, aware, utcnow
 from .security import hash_password, hash_token, new_api_key, verify_password
 
 api = APIRouter(prefix="/api")
@@ -344,3 +344,28 @@ async def delete_server(server_id: int, _: User = Depends(admin_user)):
             await db.delete(s)
             await db.commit()
     return {"ok": True}
+
+
+# ---------------- audit log ----------------
+
+@api.get("/audit")
+async def audit_log(
+    limit: int = 200, user_id: int | None = None, server: str | None = None, outcome: str | None = None,
+    via: str | None = None, user: User = Depends(current_user),
+):
+    """Newest first. Admins see everyone's calls and can filter by user; members only ever see their own."""
+    q = select(AuditLog).order_by(AuditLog.id.desc()).limit(min(max(limit, 1), 1000))
+    if user.role != "admin":
+        q = q.where(AuditLog.user_id == user.id)
+    elif user_id:
+        q = q.where(AuditLog.user_id == user_id)
+    if server:
+        q = q.where(AuditLog.server_slug == server)
+    if outcome:
+        q = q.where(AuditLog.outcome == outcome)
+    if via:
+        q = q.where(AuditLog.via == via)
+    async with Session() as db:
+        rows = (await db.scalars(q)).all()
+    return [{"id": r.id, "ts": r.ts, "user_email": r.user_email, "via": r.via, "server": r.server_slug, "tool": r.tool,
+             "duration_ms": r.duration_ms, "outcome": r.outcome, "detail": r.detail} for r in rows]

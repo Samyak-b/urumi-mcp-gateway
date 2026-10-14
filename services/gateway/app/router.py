@@ -1,4 +1,4 @@
-"""The gateway core: where tools are combined, routed and (from audit.py) recorded.
+"""The gateway core: where tools are combined, routed and audited.
 
 Both front doors use exactly these functions:
   * the MCP endpoint (/mcp), used by external clients such as Claude Code, and
@@ -17,13 +17,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from mcp.types import CallToolResult, TextContent, Tool
 from sqlalchemy import select
 
-from . import health, upstream
+from . import audit, health, upstream
 from .db import Server, Session, User
 
 log = logging.getLogger("gateway.router")
@@ -85,7 +86,10 @@ def error_result(text: str) -> CallToolResult:
 
 
 async def call_tool(user: User, name: str, arguments: dict[str, Any], via: str) -> CallToolResult:
-    """Route one tool call to its server. Never raises: every failure comes back as an isError result."""
+    """Route one tool call to its server and audit it. Never raises: every failure comes back as an isError
+    result, and every path writes exactly one audit row."""
+    started = time.monotonic()
+    ms = lambda: int((time.monotonic() - started) * 1000)  # noqa: E731
     slug, _, _ = name.partition(SEP)
     async with Session() as db:
         server = await db.scalar(select(Server).where(Server.slug == slug))
@@ -93,20 +97,31 @@ async def call_tool(user: User, name: str, arguments: dict[str, Any], via: str) 
     # Checked again here, not only when listing: a client may call a tool from an old list after the server was
     # disabled, or make up a name.
     if server is None or not server.enabled:
+        # An unknown prefix comes from the caller, so it isn't recorded as a server; the full name is in `tool`.
+        await audit.record(user, via, server.slug if server else None, name, ms(), "denied", "unknown or disabled server")
         return error_result(f"Tool '{name}' is not available: server '{slug}' is unknown or disabled.")
     match = next((t for t in server.tools or [] if exposed_name(server.slug, t["name"]) == name), None)
     if match is None:
+        await audit.record(user, via, slug, name, ms(), "denied", "unknown tool")
         return error_result(f"Server '{slug}' has no tool called '{name}'. List the tools again.")
 
     try:
         # The server's credential is added here, on the gateway. The caller's own API key is never forwarded.
-        return await upstream.call(upstream.UpstreamTarget.from_server(server), match["name"], arguments)
+        result = await upstream.call(upstream.UpstreamTarget.from_server(server), match["name"], arguments)
     except upstream.UpstreamError as exc:
+        await audit.record(user, via, slug, match["name"], ms(), exc.kind, str(exc))
         if exc.kind == "unreachable":
             # Passive health check: hide a server we can't connect to now, not at the next check.
             # An error *answer* means the server is alive, so its tools stay listed.
             await health.mark(server.id, "unreachable", str(exc))
         return error_result(f"Upstream error ({exc.kind}): {exc}")
-    except Exception as exc:  # noqa: BLE001 - a gateway bug must still give the caller an answer
+    except Exception as exc:  # noqa: BLE001 - a gateway bug must still be audited and answered
         log.exception("tool call %s failed inside the gateway", name)
+        await audit.record(user, via, slug, match["name"], ms(), "error", f"internal gateway error ({exc.__class__.__name__})")
         return error_result(f"The gateway hit an internal error ({exc.__class__.__name__}) while calling this tool.")
+
+    detail = None
+    if result.isError:  # the tool itself reported a failure (e.g. "Not found"): keep its message
+        detail = " ".join(c.text for c in result.content if isinstance(c, TextContent))[:500]
+    await audit.record(user, via, slug, match["name"], ms(), "error" if result.isError else "ok", detail)
+    return result
