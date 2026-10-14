@@ -14,6 +14,7 @@
 #   make workloads check every workload for probes, requests and limits (live cluster)
 #   make secrets-check prove no real secret value is in any tracked file or in git history
 #   make values-diff   everything that changes between local and prod (rendered charts, secrets left out)
+#   make smoke     the definition of done with two users, against the live cluster (SKIP_CHAT=1: no LLM calls)
 #   make logs-setup follow the store setup Job
 #   make down      delete the local cluster (all data goes with it)
 #
@@ -47,7 +48,7 @@ endif
 
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
 
-.PHONY: help tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff logs-setup down
+.PHONY: help tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff smoke logs-setup down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -138,3 +139,15 @@ secrets-check:
 
 values-diff:
 	@bash scripts/values-diff.sh
+
+# Runs in the gateway image (it has the MCP client SDK) on the host network, so dashboard.localhost and the
+# Kubernetes API are reachable as on this machine; kubectl and the kubeconfig are mounted for the pod-kill step.
+smoke:
+	@source <(grep -E '^GATEWAY_ADMIN_PASSWORD=' $(SECRETS)/generated.env); \
+	email=$$(sed -n 's/^ADMIN_EMAIL=//p' .env 2>/dev/null | tr -d '\r' || true); \
+	docker run --rm --network host --user "$$(id -u):$$(id -g)" \
+	  --add-host dashboard.localhost:127.0.0.1 --add-host store.localhost:127.0.0.1 \
+	  -v "$$HOME/.kube/config:/kube/config:ro" -v "$$(command -v kubectl):/usr/local/bin/kubectl:ro" \
+	  -v "$$PWD/tests:/tests:ro" -e KUBECONFIG=/kube/config -e HOME=/tmp \
+	  -e ADMIN_EMAIL="$${email:-admin@example.com}" -e ADMIN_PASSWORD="$$GATEWAY_ADMIN_PASSWORD" -e SKIP_CHAT="$${SKIP_CHAT:-}" \
+	  urumi/gateway:$(TAG) python /tests/smoke_cluster.py
