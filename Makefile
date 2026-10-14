@@ -110,18 +110,10 @@ status:
 logs-setup:
 	kubectl -n store logs job/store-setup -f
 
-# Shows the NetworkPolicies at work: throwaway curl pods try to reach internal services. Only a pod
-# labelled as the gateway, in the platform namespace, gets through to woo-mcp.
+# What is public and what is internal-only: the Ingress entry points, then throwaway pods in four places try a
+# TCP connection to every internal service, so the NetworkPolicies are shown working (see the script's header).
 isolation:
-	@kubectl create namespace platform --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-	@probe() { kubectl run np-$$RANDOM -n $$1 --rm -i --restart=Never --quiet --labels="$$2" --image=curlimages/curl:8.11.1 \
-	  --command -- sh -c "sleep 4; curl -s -m 5 -o /dev/null -w '%{http_code}' $$3 || true" 2>/dev/null | sed 's/^000$$/blocked/'; }; \
-	echo "default ns           -> woo-mcp:   $$(probe default app=probe http://woo-mcp.store.svc.cluster.local:8000/healthz)"; \
-	echo "store ns, other pod  -> woo-mcp:   $$(probe store app=probe http://woo-mcp.store.svc.cluster.local:8000/healthz)"; \
-	echo "default ns           -> wordpress: $$(probe default app=probe http://wordpress.store.svc.cluster.local/)"; \
-	echo "default ns           -> notes-mcp: $$(probe default app=probe http://notes-mcp.tools.svc.cluster.local:8000/healthz)"; \
-	echo "platform ns, gateway -> woo-mcp:   $$(probe platform app.kubernetes.io/name=gateway http://woo-mcp.store.svc.cluster.local:8000/healthz)"; \
-	echo "platform ns, gateway -> notes-mcp: $$(probe platform app.kubernetes.io/name=gateway http://notes-mcp.tools.svc.cluster.local:8000/healthz)"
+	@bash scripts/isolation.sh
 
 # The three upstreams, checked with the MCP client SDK from where the gateway will run (a pod labelled
 # gateway in the platform namespace). Reuses the woo-mcp image, which already has the SDK installed.
