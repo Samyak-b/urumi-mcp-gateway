@@ -1,0 +1,19 @@
+# Let's Encrypt issuer for the VPS. values-prod.yaml asks for it on every Ingress with the annotation
+#   cert-manager.io/cluster-issuer: letsencrypt
+# Apply once after installing cert-manager (README, "Production-like VPS"). Put a real email address in.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: you@example.com
+    privateKeySecretRef:
+      name: letsencrypt-account-key
+    solvers:
+      # HTTP-01: Let's Encrypt fetches a token from http://<host>/.well-known/acme-challenge/..., which Traefik
+      # routes to a short-lived solver pod in the Ingress's namespace (allowed by the charts' NetworkPolicies).
+      - http01:
+          ingress:
+            ingressClassName: traefik

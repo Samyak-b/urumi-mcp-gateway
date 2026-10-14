@@ -61,4 +61,24 @@ spec:
             matchLabels: { app.kubernetes.io/name: gateway }
       ports:
         - { protocol: TCP, port: 8000 }
+{{- if .Values.ingress.tls.enabled }}
+---
+# TLS in production: cert-manager proves the domain with a short-lived HTTP-01 solver pod in this namespace, which
+# Let's Encrypt reaches through Traefik. Without this rule the default deny above would block it, and no
+# certificate would ever be issued.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: acme-solver-allow-ingress-controller
+spec:
+  podSelector:
+    matchLabels: { acme.cert-manager.io/http01-solver: "true" }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace }} }
+      ports:
+        - { protocol: TCP, port: 8089 }
+{{- end }}
 {{- end }}
