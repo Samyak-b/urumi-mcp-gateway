@@ -11,6 +11,7 @@
 #   make status    pods, services, ingresses, volumes in the project namespaces
 #   make isolation show which pods may reach the internal services (NetworkPolicies)
 #   make upstreams list the tools of every upstream MCP server, from a gateway-labelled pod
+#   make workloads check every workload for probes, requests and limits (live cluster)
 #   make logs-setup follow the store setup Job
 #   make down      delete the local cluster (all data goes with it)
 #
@@ -44,7 +45,7 @@ endif
 
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
 
-.PHONY: help tools cluster secrets build import lint deploy creds status isolation upstreams logs-setup down
+.PHONY: help tools cluster secrets build import lint deploy creds status isolation upstreams workloads logs-setup down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -134,3 +135,6 @@ upstreams:
 	  notes=http://notes-mcp.tools.svc.cluster.local:8000/mcp \
 	  deepwiki=https://mcp.deepwiki.com/mcp \
 	  < scripts/check-upstreams.py
+
+workloads:
+	@kubectl get deploy,statefulset,job -A -o json | python3 scripts/check-workloads.py store tools platform
