@@ -17,6 +17,8 @@
 #   make values-diff   everything that changes between local and prod (rendered charts, secrets left out)
 #   make smoke     the definition of done with two users, against the live cluster (SKIP_CHAT=1: no LLM calls)
 #   make test      end-to-end test without Kubernetes: real gateway and MCP servers, fake store, slow server, LLM
+#   make history   the last revisions of every release (each `make deploy` is one)
+#   make rollback RELEASE=store|notes|platform [REVISION=n]   back to revision n (default: the previous one)
 #   make logs-setup follow the store setup Job
 #   make down      delete the local cluster (all data goes with it)
 #
@@ -48,9 +50,16 @@ NOTES_IMAGES = --set image=urumi/notes-mcp:$(TAG)
 PLATFORM_IMAGES = --set gateway.image=urumi/gateway:$(TAG) --set dashboard.image=urumi/dashboard:$(TAG)
 endif
 
-HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
+# --rollback-on-failure: if an upgrade doesn't become ready within the timeout, Helm puts the release back on the
+# last revision that worked, instead of leaving it half upgraded. (On a first install, it removes what it created.)
+HELM_DEPLOY := helm upgrade --install --create-namespace --wait --rollback-on-failure --timeout 20m
 
-.PHONY: help up tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff smoke test logs-setup down
+# Release -> namespace, for history and rollback.
+NS_store    := store
+NS_notes    := tools
+NS_platform := platform
+
+.PHONY: help up tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff smoke test logs-setup down history rollback
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -110,6 +119,18 @@ status:
 	kubectl get pods,svc,ingress,pvc,networkpolicy -n store
 	kubectl get pods,svc,networkpolicy -n tools
 	kubectl get pods,svc,ingress,pvc,networkpolicy -n platform
+
+history:
+	helm history store    -n store    --max 5
+	helm history notes    -n tools    --max 5
+	helm history platform -n platform --max 5
+
+# A rollback is a new revision with an old revision's configuration (chart, values, image tags). Data on the
+# volumes is not touched. `make deploy` goes forward to the last built tag again.
+rollback:
+	@case "$(RELEASE)" in store|notes|platform) ;; *) echo "usage: make rollback RELEASE=store|notes|platform [REVISION=n]"; exit 1;; esac
+	helm rollback $(RELEASE) $(REVISION) -n $(NS_$(RELEASE)) --wait --timeout 10m
+	helm history $(RELEASE) -n $(NS_$(RELEASE)) --max 3
 
 logs-setup:
 	kubectl -n store logs job/store-setup -f
