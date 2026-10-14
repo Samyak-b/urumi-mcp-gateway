@@ -1,0 +1,46 @@
+# Checks every push and pull request. Nothing here needs a cluster or real secrets.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  e2e:
+    name: End-to-end test (gateway, MCP servers, fakes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/gateway/requirements.txt
+      - run: pip install -r services/gateway/requirements.txt
+      - run: python tests/test_e2e.py
+
+  helm:
+    name: Helm lint (local and prod values)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Generate throwaway secrets
+        run: bash scripts/gen-secrets.sh
+      - name: Lint every chart with both value sets
+        run: |
+          make lint ENV=local
+          make lint ENV=prod
+      - name: No real secret in the repository
+        run: bash scripts/check-secrets.sh
+
+  images:
+    name: Build images and the dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build every image (the dashboard image runs npm ci and vite build)
+        run: |
+          for pair in gateway:services/gateway woo-mcp:services/woo-mcp notes-mcp:services/notes-mcp dashboard:dashboard; do
+            docker build -t "urumi/${pair%%:*}:ci" "${pair#*:}"
+          done
