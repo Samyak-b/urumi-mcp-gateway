@@ -10,6 +10,7 @@
 #   make creds     print the logins (keep them off camera)
 #   make status    pods, services, ingresses, volumes in the project namespaces
 #   make isolation show which pods may reach the internal services (NetworkPolicies)
+#   make upstreams list the tools of every upstream MCP server, from a gateway-labelled pod
 #   make logs-setup follow the store setup Job
 #   make down      delete the local cluster (all data goes with it)
 #
@@ -42,7 +43,7 @@ endif
 
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
 
-.PHONY: help tools cluster secrets build import lint deploy creds status isolation logs-setup down
+.PHONY: help tools cluster secrets build import lint deploy creds status isolation upstreams logs-setup down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -112,3 +113,17 @@ isolation:
 	echo "default ns           -> notes-mcp: $$(probe default app=probe http://notes-mcp.tools.svc.cluster.local:8000/healthz)"; \
 	echo "platform ns, gateway -> woo-mcp:   $$(probe platform app.kubernetes.io/name=gateway http://woo-mcp.store.svc.cluster.local:8000/healthz)"; \
 	echo "platform ns, gateway -> notes-mcp: $$(probe platform app.kubernetes.io/name=gateway http://notes-mcp.tools.svc.cluster.local:8000/healthz)"
+
+# The three upstreams, checked with the MCP client SDK from where the gateway will run (a pod labelled
+# gateway in the platform namespace). Reuses the woo-mcp image, which already has the SDK installed.
+upstreams:
+	@kubectl create namespace platform --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+	@source <(grep -E '^(WOO|NOTES)_MCP_TOKEN=' $(SECRETS)/generated.env); \
+	kubectl run upstream-check-$$RANDOM -n platform --rm -i --restart=Never --quiet \
+	  --labels=app.kubernetes.io/name=gateway --image=urumi/woo-mcp:$(TAG) \
+	  --env=TOKEN_WOO=$$WOO_MCP_TOKEN --env=TOKEN_NOTES=$$NOTES_MCP_TOKEN \
+	  --command -- python - \
+	  woo=http://woo-mcp.store.svc.cluster.local:8000/mcp \
+	  notes=http://notes-mcp.tools.svc.cluster.local:8000/mcp \
+	  deepwiki=https://mcp.deepwiki.com/mcp \
+	  < scripts/check-upstreams.py

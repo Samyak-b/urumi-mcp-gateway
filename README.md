@@ -48,3 +48,16 @@ WooCommerce by the setup Job. Details in `services/woo-mcp/woo_client.py`.
 **Who can reach it:** nobody outside the cluster (ClusterIP Service, no Ingress). Inside the cluster, a
 NetworkPolicy admits only gateway pods, and the server also requires the gateway's bearer token.
 `make isolation` shows this live.
+
+## Upstream MCP servers
+
+The gateway connects to three upstreams, all over Streamable HTTP:
+
+| Server | Where | Auth | Why this one |
+|---|---|---|---|
+| `woo-mcp` | in the cluster, namespace `store` | bearer token | Our WooCommerce server (the first data source) |
+| `notes-mcp` | in the cluster, namespace `tools` | bearer token | A team notepad we control: its pod can be killed to show failure isolation, and "summarise today's orders and save them as a note" needs two servers |
+| DeepWiki | public internet, `https://mcp.deepwiki.com/mcp` | none | An external server we don't control, which answers with SSE streams instead of plain JSON |
+
+`make upstreams` connects to all three with the MCP client SDK from a pod labelled as the gateway, so it
+uses the same network path and NetworkPolicies the gateway will.
