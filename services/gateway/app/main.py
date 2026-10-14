@@ -16,6 +16,7 @@ from . import health
 from .api import api
 from .config import settings
 from .db import Server, Session, User, init_db, ping_db, wait_for_db
+from .mcp_endpoint import mcp_asgi, session_manager
 from .security import hash_password
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -53,7 +54,8 @@ async def lifespan(_: FastAPI):
     await init_db()
     await bootstrap()
     checks = asyncio.create_task(health.loop())
-    yield
+    async with session_manager.run():  # the MCP SDK's request handling for /mcp
+        yield
     checks.cancel()
 
 
@@ -61,9 +63,9 @@ if not settings().session_secret:
     # It signs the session cookies; without it (or with a guessable one) anyone could forge a login.
     raise RuntimeError("SESSION_SECRET is not set")
 
-app = FastAPI(title="Team MCP Gateway", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
+fastapi_app = FastAPI(title="Team MCP Gateway", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
 # The session lives in a signed cookie (only the user id): no session table, and any replica can read it.
-app.add_middleware(
+fastapi_app.add_middleware(
     SessionMiddleware,
     secret_key=settings().session_secret,
     session_cookie="gw_session",
@@ -71,16 +73,16 @@ app.add_middleware(
     same_site="lax",
     https_only=settings().cookie_secure,
 )
-app.include_router(api)
+fastapi_app.include_router(api)
 
 
-@app.get("/healthz")
+@fastapi_app.get("/healthz")
 async def healthz():
     """Liveness: the process answers. Deliberately no database check, so a DB blip doesn't restart the pod."""
     return {"ok": True}
 
 
-@app.get("/readyz")
+@fastapi_app.get("/readyz")
 async def readyz():
     """Readiness: the process answers and reaches its database; otherwise Kubernetes stops sending traffic."""
     try:
@@ -88,3 +90,10 @@ async def readyz():
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"ok": False, "db": str(exc)[:200]}, status_code=503)
     return {"ok": True}
+
+
+async def app(scope, receive, send):
+    """Send /mcp (exactly; no redirect to /mcp/) to the MCP endpoint and everything else to FastAPI."""
+    if scope["type"] == "http" and scope["path"].rstrip("/") == "/mcp":
+        return await mcp_asgi(scope, receive, send)
+    return await fastapi_app(scope, receive, send)
