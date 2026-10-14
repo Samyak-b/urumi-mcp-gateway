@@ -19,6 +19,7 @@
 #   make test      end-to-end test without Kubernetes: real gateway and MCP servers, fake store, slow server, LLM
 #   make history   the last revisions of every release (each `make deploy` is one)
 #   make rollback RELEASE=store|notes|platform [REVISION=n]   back to revision n (default: the previous one)
+#   make rollback-check  a broken upgrade rolls itself back; store + platform rolled back and forward, data kept
 #   make logs-setup follow the store setup Job
 #   make down      delete the local cluster (all data goes with it)
 #
@@ -59,7 +60,7 @@ NS_store    := store
 NS_notes    := tools
 NS_platform := platform
 
-.PHONY: help up tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff smoke test logs-setup down history rollback
+.PHONY: help up tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff smoke test logs-setup down history rollback rollback-check
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -131,6 +132,11 @@ rollback:
 	@case "$(RELEASE)" in store|notes|platform) ;; *) echo "usage: make rollback RELEASE=store|notes|platform [REVISION=n]"; exit 1;; esac
 	helm rollback $(RELEASE) $(REVISION) -n $(NS_$(RELEASE)) --wait --timeout 10m
 	helm history $(RELEASE) -n $(NS_$(RELEASE)) --max 3
+
+# A broken upgrade rolling itself back, then the store and the platform rolled back and forward with their data
+# counted before and after (see the script's header). Takes a few minutes; ends where it started.
+rollback-check:
+	@bash scripts/rollback-check.sh
 
 logs-setup:
 	kubectl -n store logs job/store-setup -f
