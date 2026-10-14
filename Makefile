@@ -13,6 +13,7 @@
 #   make upstreams list the tools of every upstream MCP server, from a gateway-labelled pod
 #   make workloads check every workload for probes, requests and limits (live cluster)
 #   make secrets-check prove no real secret value is in any tracked file or in git history
+#   make values-diff   everything that changes between local and prod (rendered charts, secrets left out)
 #   make logs-setup follow the store setup Job
 #   make down      delete the local cluster (all data goes with it)
 #
@@ -46,7 +47,7 @@ endif
 
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
 
-.PHONY: help tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check logs-setup down
+.PHONY: help tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff logs-setup down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -134,3 +135,6 @@ workloads:
 
 secrets-check:
 	@bash scripts/check-secrets.sh
+
+values-diff:
+	@bash scripts/values-diff.sh
