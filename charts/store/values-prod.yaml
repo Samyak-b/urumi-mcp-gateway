@@ -19,3 +19,6 @@ mariadb:
 
 wordpress:
   size: 10Gi
+
+mcp:
+  image: ghcr.io/samyak-b/woo-mcp:0.1.0   # published by CI; local builds are imported into k3d instead

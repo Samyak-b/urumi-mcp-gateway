@@ -9,6 +9,7 @@
 #   make deploy    helm upgrade --install every release (waits until ready)
 #   make creds     print the logins (keep them off camera)
 #   make status    pods, services, ingresses, volumes in the project namespaces
+#   make isolation show which pods may reach the internal services (NetworkPolicies)
 #   make logs-setup follow the store setup Job
 #   make down      delete the local cluster (all data goes with it)
 #
@@ -33,9 +34,14 @@ endif
 # image-name:source-dir
 IMAGES := woo-mcp:services/woo-mcp
 
+# Local builds: point the charts at the freshly imported images. Prod uses the registry images in values-prod.yaml.
+ifeq ($(ENV),local)
+STORE_IMAGES = --set mcp.image=urumi/woo-mcp:$(TAG)
+endif
+
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
 
-.PHONY: help tools cluster secrets build import lint deploy creds status logs-setup down
+.PHONY: help tools cluster secrets build import lint deploy creds status isolation logs-setup down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -75,14 +81,26 @@ lint:
 	helm lint charts/store -f charts/store/values-$(ENV).yaml -f $(SECRETS)/store.yaml
 
 deploy:
-	$(HELM_DEPLOY) store charts/store -n store -f charts/store/values-$(ENV).yaml -f $(SECRETS)/store.yaml
+	@[ "$(ENV)" != local ] || [ "$(TAG)" != none ] || { echo "no images built yet: run make build import first"; exit 1; }
+	$(HELM_DEPLOY) store charts/store -n store -f charts/store/values-$(ENV).yaml -f $(SECRETS)/store.yaml $(STORE_IMAGES)
 
 creds:
 	@source <(grep -E '^STORE_ADMIN_PASSWORD=' $(SECRETS)/generated.env); \
 	echo "WordPress  http://store.localhost/wp-admin   admin / $$STORE_ADMIN_PASSWORD"
 
 status:
-	kubectl get pods,svc,ingress,pvc -n store
+	kubectl get pods,svc,ingress,pvc,networkpolicy -n store
 
 logs-setup:
 	kubectl -n store logs job/store-setup -f
+
+# Shows the NetworkPolicies at work: throwaway curl pods try to reach internal services. Only a pod
+# labelled as the gateway, in the platform namespace, gets through to woo-mcp.
+isolation:
+	@kubectl create namespace platform --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+	@probe() { kubectl run np-$$RANDOM -n $$1 --rm -i --restart=Never --quiet --labels="$$2" --image=curlimages/curl:8.11.1 \
+	  --command -- sh -c "sleep 4; curl -s -m 5 -o /dev/null -w '%{http_code}' $$3 || true" 2>/dev/null | sed 's/^000$$/blocked/'; }; \
+	echo "default ns           -> woo-mcp:   $$(probe default app=probe http://woo-mcp.store.svc.cluster.local:8000/healthz)"; \
+	echo "store ns, other pod  -> woo-mcp:   $$(probe store app=probe http://woo-mcp.store.svc.cluster.local:8000/healthz)"; \
+	echo "default ns           -> wordpress: $$(probe default app=probe http://wordpress.store.svc.cluster.local/)"; \
+	echo "platform ns, gateway -> woo-mcp:   $$(probe platform app.kubernetes.io/name=gateway http://woo-mcp.store.svc.cluster.local:8000/healthz)"

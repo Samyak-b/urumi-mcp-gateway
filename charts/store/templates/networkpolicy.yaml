@@ -1,0 +1,64 @@
+{{- if .Values.networkPolicy.enabled }}
+# Deny all incoming traffic in this namespace, then allow exactly these paths:
+#   Ingress controller -> wordpress:80     the storefront
+#   woo-mcp            -> wordpress:80     the REST API
+#   wordpress, setup   -> mariadb:3306
+#   gateway pods       -> woo-mcp:8000     nothing else may call the MCP server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}   # every pod in the namespace
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mariadb-allow-wordpress
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: mariadb }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: wordpress } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: store-setup } }
+      ports:
+        - { protocol: TCP, port: 3306 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wordpress-allow-ingress-and-mcp
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: wordpress }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace }} }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: woo-mcp } }
+      ports:
+        - { protocol: TCP, port: 80 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: woo-mcp-allow-gateway-only
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: woo-mcp }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        # namespaceSelector and podSelector in ONE list item = both must match:
+        # pods labelled gateway, in the gateway's namespace.
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.gatewayNamespace }} }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: gateway }
+      ports:
+        - { protocol: TCP, port: 8000 }
+{{- end }}

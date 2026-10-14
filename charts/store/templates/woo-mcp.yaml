@@ -1,0 +1,65 @@
+# The store's own MCP server. Internal only: a ClusterIP Service and no Ingress; networkpolicy.yaml admits
+# only gateway pods, and the server itself also requires the gateway's bearer token.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: woo-mcp
+  labels: {{- include "store.labels" (dict "name" "woo-mcp" "root" .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.mcp.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: woo-mcp
+  template:
+    metadata:
+      labels: {{- include "store.labels" (dict "name" "woo-mcp" "root" .) | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+        - name: woo-mcp
+          image: {{ .Values.mcp.image }}
+          imagePullPolicy: {{ .Values.mcp.pullPolicy }}
+          env:
+            - { name: WOO_BASE_URL, value: "http://wordpress" }   # the Service, not the public URL
+            - { name: STORE_PUBLIC_URL, value: {{ .Values.store.url | quote }} }
+            - { name: STORE_TIMEZONE, value: {{ .Values.store.timezone | quote }} }
+            - name: WOO_CONSUMER_KEY
+              valueFrom: { secretKeyRef: { name: store-mcp, key: consumer-key } }
+            - name: WOO_CONSUMER_SECRET
+              valueFrom: { secretKeyRef: { name: store-mcp, key: consumer-secret } }
+            - name: MCP_TOKEN
+              valueFrom: { secretKeyRef: { name: store-mcp, key: mcp-token } }
+          ports:
+            - { name: http, containerPort: 8000 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources: {{- toYaml .Values.mcp.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: woo-mcp
+  labels: {{- include "store.labels" (dict "name" "woo-mcp" "root" .) | nindent 4 }}
+spec:
+  type: ClusterIP   # reachable only inside the cluster
+  selector:
+    app.kubernetes.io/name: woo-mcp
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

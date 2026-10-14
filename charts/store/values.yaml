@@ -42,6 +42,19 @@ setup:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "1", memory: 768Mi }
 
+mcp:
+  image: urumi/woo-mcp:dev         # local builds override this with a fresh tag (make deploy)
+  pullPolicy: IfNotPresent
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 96Mi }
+    limits: { cpu: 300m, memory: 256Mi }
+
+networkPolicy:
+  enabled: true
+  gatewayNamespace: platform       # only gateway pods from this namespace may call the MCP server
+  ingressControllerNamespace: kube-system   # where Traefik runs on k3d/k3s
+
 # Rendered into Kubernetes Secrets. The chart refuses to install while any of them is empty.
 secrets:
   dbRootPassword: ""
