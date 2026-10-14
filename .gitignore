@@ -13,5 +13,6 @@ __pycache__/
 node_modules/
 dist/
 
-# Private working notes
+# Private working notes (handoff: learning notes, handover: build notes)
 docs/handoff/
+docs/handover/
