@@ -6,13 +6,15 @@ import Servers from "./pages/Servers.jsx";
 import Connect from "./pages/Connect.jsx";
 import Team from "./pages/Team.jsx";
 import Audit from "./pages/Audit.jsx";
+import Chat from "./pages/Chat.jsx";
 
-const VIEWS = { servers: Servers, connect: Connect, team: Team, audit: Audit };
+const VIEWS = { servers: Servers, chat: Chat, connect: Connect, team: Team, audit: Audit };
 
 // Pages are chosen by the URL hash (#/servers, #/join/<token>): no router library, and the nginx container only
 // ever serves index.html.
 const PAGES = [
   { id: "servers", label: "Servers" },
+  { id: "chat", label: "Chat" },
   { id: "team", label: "Team", admin: true },
   { id: "connect", label: "Connect a client" },
   { id: "audit", label: "Audit log" },
