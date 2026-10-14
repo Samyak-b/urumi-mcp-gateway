@@ -1,0 +1,90 @@
+{{- define "notes.labels" -}}
+app.kubernetes.io/name: notes-mcp
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+{{- end -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: notes-mcp
+  labels: {{- include "notes.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  mcp-token: {{ required "secrets.mcpToken is required (run make secrets)" .Values.secrets.mcpToken | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notes-mcp
+  labels: {{- include "notes.labels" . | nindent 4 }}
+spec:
+  replicas: 1   # notes are in memory, so one replica holds them all
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notes-mcp
+  template:
+    metadata:
+      labels: {{- include "notes.labels" . | nindent 8 }}
+      annotations:
+        checksum/secret: {{ .Values.secrets.mcpToken | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+        - name: notes-mcp
+          image: {{ .Values.image }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          env:
+            - name: MCP_TOKEN
+              valueFrom: { secretKeyRef: { name: notes-mcp, key: mcp-token } }
+          ports:
+            - { name: http, containerPort: 8000 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notes-mcp
+  labels: {{- include "notes.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: notes-mcp
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+{{- if .Values.networkPolicy.enabled }}
+---
+# Deny all incoming traffic in this namespace except gateway pods -> notes-mcp:8000.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: notes-mcp-allow-gateway-only
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.gatewayNamespace }} }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: gateway }
+      ports:
+        - { protocol: TCP, port: 8000 }
+{{- end }}

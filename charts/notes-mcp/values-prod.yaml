@@ -1,0 +1,2 @@
+# Production-like VPS: the image comes from the registry.
+image: ghcr.io/samyak-b/notes-mcp:0.1.0

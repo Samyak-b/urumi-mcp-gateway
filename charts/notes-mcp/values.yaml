@@ -1,0 +1,13 @@
+image: urumi/notes-mcp:dev          # local builds override this with a fresh tag (make deploy)
+pullPolicy: IfNotPresent
+resources:
+  requests: { cpu: 20m, memory: 64Mi }
+  limits: { cpu: 200m, memory: 192Mi }
+
+networkPolicy:
+  enabled: true
+  gatewayNamespace: platform       # only gateway pods from this namespace may call the server
+
+# Rendered into a Secret; `make secrets` generates it.
+secrets:
+  mcpToken: ""

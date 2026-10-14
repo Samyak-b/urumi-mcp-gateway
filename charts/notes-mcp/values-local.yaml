@@ -1,0 +1,2 @@
+# Local k3d cluster: the image comes from `make build import` (make deploy sets the tag).
+{}

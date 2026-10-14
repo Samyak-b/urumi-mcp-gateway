@@ -32,11 +32,12 @@ TAG := $(shell cat $(TAG_FILE) 2>/dev/null || echo none)
 endif
 
 # image-name:source-dir
-IMAGES := woo-mcp:services/woo-mcp
+IMAGES := woo-mcp:services/woo-mcp notes-mcp:services/notes-mcp
 
 # Local builds: point the charts at the freshly imported images. Prod uses the registry images in values-prod.yaml.
 ifeq ($(ENV),local)
 STORE_IMAGES = --set mcp.image=urumi/woo-mcp:$(TAG)
+NOTES_IMAGES = --set image=urumi/notes-mcp:$(TAG)
 endif
 
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
@@ -78,11 +79,15 @@ import:
 	k3d image import -c $(CLUSTER) $(foreach pair,$(IMAGES),urumi/$(firstword $(subst :, ,$(pair))):$(TAG))
 
 lint:
-	helm lint charts/store -f charts/store/values-$(ENV).yaml -f $(SECRETS)/store.yaml
+	helm lint charts/store     -f charts/store/values-$(ENV).yaml     -f $(SECRETS)/store.yaml
+	helm lint charts/notes-mcp -f charts/notes-mcp/values-$(ENV).yaml -f $(SECRETS)/notes.yaml
 
 deploy:
 	@[ "$(ENV)" != local ] || [ "$(TAG)" != none ] || { echo "no images built yet: run make build import first"; exit 1; }
-	$(HELM_DEPLOY) store charts/store -n store -f charts/store/values-$(ENV).yaml -f $(SECRETS)/store.yaml $(STORE_IMAGES)
+	$(HELM_DEPLOY) store charts/store -n store \
+	  -f charts/store/values-$(ENV).yaml -f $(SECRETS)/store.yaml $(STORE_IMAGES)
+	$(HELM_DEPLOY) notes charts/notes-mcp -n tools \
+	  -f charts/notes-mcp/values-$(ENV).yaml -f $(SECRETS)/notes.yaml $(NOTES_IMAGES)
 
 creds:
 	@source <(grep -E '^STORE_ADMIN_PASSWORD=' $(SECRETS)/generated.env); \
@@ -90,6 +95,7 @@ creds:
 
 status:
 	kubectl get pods,svc,ingress,pvc,networkpolicy -n store
+	kubectl get pods,svc,networkpolicy -n tools
 
 logs-setup:
 	kubectl -n store logs job/store-setup -f
@@ -103,4 +109,6 @@ isolation:
 	echo "default ns           -> woo-mcp:   $$(probe default app=probe http://woo-mcp.store.svc.cluster.local:8000/healthz)"; \
 	echo "store ns, other pod  -> woo-mcp:   $$(probe store app=probe http://woo-mcp.store.svc.cluster.local:8000/healthz)"; \
 	echo "default ns           -> wordpress: $$(probe default app=probe http://wordpress.store.svc.cluster.local/)"; \
-	echo "platform ns, gateway -> woo-mcp:   $$(probe platform app.kubernetes.io/name=gateway http://woo-mcp.store.svc.cluster.local:8000/healthz)"
+	echo "default ns           -> notes-mcp: $$(probe default app=probe http://notes-mcp.tools.svc.cluster.local:8000/healthz)"; \
+	echo "platform ns, gateway -> woo-mcp:   $$(probe platform app.kubernetes.io/name=gateway http://woo-mcp.store.svc.cluster.local:8000/healthz)"; \
+	echo "platform ns, gateway -> notes-mcp: $$(probe platform app.kubernetes.io/name=gateway http://notes-mcp.tools.svc.cluster.local:8000/healthz)"
