@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import health
-from .api import api
+from .api import api, set_admin_only
 from .config import settings
 from .db import Server, Session, User, init_db, ping_db, wait_for_db
 from .mcp_endpoint import mcp_asgi, session_manager
@@ -37,13 +37,14 @@ async def bootstrap() -> None:
         for seed in json.loads(cfg.seed_servers or "[]"):
             if await db.scalar(select(Server).where(Server.slug == seed["slug"])):
                 continue  # seeded once; after that the dashboard owns the record
-            db.add(
-                Server(
-                    slug=seed["slug"], name=seed["name"], url=seed["url"],
-                    auth_type=seed.get("auth_type", "none"), auth_header=seed.get("auth_header"),
-                    credential=seed.get("credential") or None,
-                )
+            server = Server(
+                slug=seed["slug"], name=seed["name"], url=seed["url"],
+                auth_type=seed.get("auth_type", "none"), auth_header=seed.get("auth_header"),
+                credential=seed.get("credential") or None,
             )
+            db.add(server)
+            await db.flush()  # assigns server.id
+            await set_admin_only(db, server.id, seed.get("admin_only_tools", []))
             log.info("registered seed server %s -> %s", seed["slug"], seed["url"])
         await db.commit()
 

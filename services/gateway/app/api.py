@@ -1,8 +1,9 @@
 """REST API for the React dashboard. Authenticated with a signed session cookie.
 
 Who may do what:
-  admin  - manage servers, invite users, change roles, issue and revoke anyone's keys, see the whole audit log
-  member - see servers and their tools, manage their own keys, use the chat, see their own audit rows
+  admin  - manage servers and which of their tools are admin-only, invite users, change roles, issue and revoke
+           anyone's keys, see the whole audit log; use every tool
+  member - see servers and the tools they may use, manage their own keys, use the chat, see their own audit rows
 Upstream credentials are write-only: the API accepts them but only ever answers with `has_credential`.
 """
 
@@ -15,11 +16,12 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from . import chat, health
 from .config import settings
-from .db import ApiKey, AuditLog, Invite, Server, Session, User, aware, utcnow
+from .db import AdminOnlyTool, ApiKey, AuditLog, Invite, Server, Session, User, aware, utcnow
+from .router import admin_only_tools
 from .security import hash_password, hash_token, new_api_key, verify_password
 
 api = APIRouter(prefix="/api")
@@ -253,6 +255,7 @@ class ServerIn(BaseModel):
     auth_header: str | None = Field(default=None, max_length=100)  # the header's name when auth_type is "header"
     credential: str | None = Field(default=None, max_length=4000)
     enabled: bool = True
+    admin_only_tools: list[str] = Field(default=[], max_length=500)  # the upstream's tool names, e.g. create_product
 
     @field_validator("slug")
     @classmethod
@@ -269,14 +272,18 @@ class ServerPatch(BaseModel):
     auth_header: str | None = Field(default=None, max_length=100)
     credential: str | None = Field(default=None, max_length=4000)  # left out = keep the stored one; "" = clear it
     enabled: bool | None = None
+    admin_only_tools: list[str] | None = Field(default=None, max_length=500)  # left out = keep; a list replaces them
 
 
-def server_out(s: Server, user: User) -> dict:
+def server_out(s: Server, user: User, locked: set[tuple[int, str]]) -> dict:
+    """`locked`: the admin-only tools (admin_only_tools()). Members don't see those tools at all."""
+    tools = [{"name": f"{s.slug}__{t['name']}", "description": (t.get("description") or "")[:300],
+              "admin_only": (s.id, t["name"]) in locked} for t in s.tools or []]
     out = {
         "id": s.id, "slug": s.slug, "name": s.name, "enabled": s.enabled,
         "status": "disabled" if not s.enabled else s.status,
         "last_checked_at": s.last_checked_at,
-        "tools": [{"name": f"{s.slug}__{t['name']}", "description": (t.get("description") or "")[:300]} for t in s.tools or []],
+        "tools": tools if user.role == "admin" else [t for t in tools if not t["admin_only"]],
     }
     if user.role == "admin":
         # Admins also see where it points and how it authenticates, but never the credential itself.
@@ -285,11 +292,19 @@ def server_out(s: Server, user: User) -> dict:
     return out
 
 
+async def set_admin_only(db, server_id: int, tools: list[str]) -> None:
+    """Replace a server's admin-only tools with `tools` (the upstream's own names)."""
+    await db.execute(delete(AdminOnlyTool).where(AdminOnlyTool.server_id == server_id))
+    for tool in sorted({t.strip() for t in tools if t.strip()}):
+        db.add(AdminOnlyTool(server_id=server_id, tool=tool[:200]))
+
+
 @api.get("/servers")
 async def list_servers(user: User = Depends(current_user)):
     async with Session() as db:
         rows = (await db.scalars(select(Server).order_by(Server.id))).all()
-    return [server_out(s, user) for s in rows]
+        locked = await admin_only_tools(db)
+    return [server_out(s, user, locked) for s in rows]
 
 
 @api.post("/servers")
@@ -301,6 +316,8 @@ async def create_server(body: ServerIn, admin: User = Depends(admin_user)):
                    credential=body.credential if body.credential and body.auth_type != "none" else None,
                    enabled=body.enabled)
         db.add(s)
+        await db.flush()  # assigns s.id
+        await set_admin_only(db, s.id, body.admin_only_tools)
         await db.commit()
     return await _checked(s.id, admin)
 
@@ -312,7 +329,7 @@ async def _checked(server_id: int, admin: User) -> dict:
         s = await db.get(Server, server_id)
         if s is None:
             raise HTTPException(404, "No such server")
-        return server_out(s, admin)
+        return server_out(s, admin, await admin_only_tools(db, server_id))
 
 
 @api.post("/servers/{server_id}/refresh")
@@ -335,6 +352,8 @@ async def update_server(server_id: int, body: ServerPatch, admin: User = Depends
             s.credential = None  # "no authentication" means nothing stored, not an old credential left behind
         if body.enabled is False:
             s.status = "unknown"
+        if body.admin_only_tools is not None:
+            await set_admin_only(db, s.id, body.admin_only_tools)
         await db.commit()
     return await _checked(server_id, admin)
 
@@ -343,6 +362,8 @@ async def update_server(server_id: int, body: ServerPatch, admin: User = Depends
 async def delete_server(server_id: int, _: User = Depends(admin_user)):
     async with Session() as db:
         if s := await db.get(Server, server_id):
+            # Explicitly, not only by the foreign key's ON DELETE CASCADE: SQLite (the tests) doesn't enforce it.
+            await db.execute(delete(AdminOnlyTool).where(AdminOnlyTool.server_id == server_id))
             await db.delete(s)
             await db.commit()
     return {"ok": True}

@@ -94,6 +94,16 @@ class Server(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class AdminOnlyTool(Base):
+    """Tool permissions: a tool that only admins may list and call. One row per (server, tool); a tool without a
+    row is open to every member. Its own table rather than a column on servers, so an existing database gets it
+    from create_all without a migration."""
+
+    __tablename__ = "admin_only_tools"
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), primary_key=True)
+    tool: Mapped[str] = mapped_column(String(200), primary_key=True)  # the upstream's own name, e.g. create_product
+
+
 class AuditLog(Base):
     """One row per tool call, from MCP clients and from the chat agent."""
 

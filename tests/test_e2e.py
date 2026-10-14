@@ -44,7 +44,8 @@ os.environ.update({
     "PUBLIC_URL": URL["gateway"], "HEALTH_INTERVAL_S": "1", "UPSTREAM_CALL_TIMEOUT_S": "3",
     "LLM_BASE_URL": URL["llm"] + "/v1", "LLM_MODEL": "scripted", "LLM_API_KEY": "llm-secret-3333",
     "SEED_SERVERS": json.dumps([
-        {"slug": "woo", "name": "WooCommerce store", "url": URL["woo"] + "/mcp", "auth_type": "bearer", "credential": WOO_TOKEN},
+        {"slug": "woo", "name": "WooCommerce store", "url": URL["woo"] + "/mcp", "auth_type": "bearer", "credential": WOO_TOKEN,
+         "admin_only_tools": ["create_product", "update_order_status"]},
         {"slug": "notes", "name": "Team notes", "url": URL["notes"] + "/mcp", "auth_type": "bearer", "credential": NOTES_TOKEN},
         {"slug": "slow", "name": "Slow server", "url": URL["slow"] + "/mcp"},
     ]),
@@ -178,6 +179,24 @@ async def main() -> int:
     r = await call(key, "notes__search", {"query": "e2e"})
     check("notes__search is routed to notes, not to the other 'search'", not r.isError and "from e2e" in text(r))
 
+    print("\n== tool permissions: members read orders, only admins create products or change order status")
+    admin_key = (await admin.json("POST", "/keys", {"name": "e2e-admin"}))["key"]
+    admin_tools = await names(admin_key)
+    check("members aren't listed the admin-only tools", "woo__create_product" not in tools
+          and "woo__update_order_status" not in tools and "woo__list_orders" in tools)
+    check("admins are listed every tool", {"woo__create_product", "woo__update_order_status"} <= set(admin_tools))
+    before = len(woo_api.state.woo["products"])
+    r = await call(key, "woo__create_product", {"name": "Not allowed", "regular_price": "1.00"})
+    check("a member calling an admin-only tool directly is refused",
+          r.isError and "admins only" in text(r) and len(woo_api.state.woo["products"]) == before, text(r)[:60])
+    woo = next(s for s in await member.json("GET", "/servers") if s["slug"] == "woo")
+    check("the dashboard doesn't show members the admin-only tools", "woo__create_product" not in [t["name"] for t in woo["tools"]])
+    woo_id = woo["id"]
+    await admin.json("PATCH", f"/servers/{woo_id}", {"admin_only_tools": ["create_product"]})
+    check("an admin opening a tool to members lists it for them at once", "woo__update_order_status" in await names(key))
+    await admin.json("PATCH", f"/servers/{woo_id}", {"admin_only_tools": ["create_product", "update_order_status"]})
+    check("and locking it again hides it", "woo__update_order_status" not in await names(key))
+
     print("\n== a slow upstream times out without holding up the others")
     started = time.monotonic()
     slow, fast = await asyncio.gather(call(key, "slow__search", {"query": "x"}), call(key, "woo__list_products", {}))
@@ -203,7 +222,9 @@ async def main() -> int:
     reply = await admin.json("POST", "/chat", {"messages": [{"role": "user", "content": "Create a product called Linen Apron for 24.00"}]})
     check("chat created the product through the gateway", [s["tool"] for s in reply["steps"]] == ["woo__create_product"]
           and any(p["name"] == "Linen Apron" for p in woo_api.state.woo["products"]))
-    check("the LLM was offered the same tools as an MCP client", set(llm.state.seen["offered"]) == set(tools))
+    check("the LLM was offered the same tools as the admin's MCP client", set(llm.state.seen["offered"]) == set(admin_tools))
+    await member.json("POST", "/chat", {"messages": [{"role": "user", "content": "What orders came in today?"}]})
+    check("a member's chat is offered the member's tools, without the admin-only ones", set(llm.state.seen["offered"]) == set(tools))
 
     print("\n== disabling a server, killing one, revoking a key")
     notes_id = next(s["id"] for s in listed if s["slug"] == "notes")
@@ -235,6 +256,9 @@ async def main() -> int:
                 ("b@example.com", "mcp", "denied"), ("b@example.com", "mcp", "unreachable"),
                 ("b@example.com", "mcp", "rejected"), ("admin@example.com", "chat", "ok")]:
         check(f"audit has {row[2]!r} under {row[0]} via {row[1]}", row in outcomes)
+    check("the refused admin-only call is audited as denied under the member",
+          any(r["user_email"] == "b@example.com" and r["tool"] == "create_product" and r["outcome"] == "denied"
+              and r["detail"] == "admins only" for r in rows))
     timeout_row = next(r for r in rows if r["outcome"] == "timeout")
     check("audit rows carry server, tool and duration", timeout_row["server"] == "slow" and timeout_row["tool"] == "search"
           and timeout_row["duration_ms"] >= 2500, f"{timeout_row['duration_ms']} ms")

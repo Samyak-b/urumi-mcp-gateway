@@ -25,7 +25,7 @@ from mcp.types import CallToolResult, TextContent, Tool
 from sqlalchemy import select
 
 from . import audit, health, upstream
-from .db import Server, Session, User
+from .db import AdminOnlyTool, Server, Session, User
 
 log = logging.getLogger("gateway.router")
 
@@ -68,17 +68,26 @@ def _tools_of(server: Server) -> list[RoutedTool]:
     return out
 
 
+async def admin_only_tools(db, server_id: int | None = None) -> set[tuple[int, str]]:
+    """(server id, upstream tool name) of every tool that only admins may use (tool permissions)."""
+    q = select(AdminOnlyTool.server_id, AdminOnlyTool.tool)
+    if server_id is not None:
+        q = q.where(AdminOnlyTool.server_id == server_id)
+    return {(sid, tool) for sid, tool in (await db.execute(q)).all()}
+
+
 async def routable_tools(user: User) -> list[RoutedTool]:
-    """The tools of every enabled, currently connected server.
+    """The tools of every enabled, currently connected server that this user may use.
 
     Reads the tool lists the health check cached in the database. Listing therefore never waits on an upstream,
-    so a slow or dead server can't break tools/list for anyone. `user` is where per-user rules plug in.
+    so a slow or dead server can't break tools/list for anyone. Members don't get admin-only tools at all.
     """
     async with Session() as db:
         servers = (await db.scalars(
             select(Server).where(Server.enabled.is_(True), Server.status == "connected").order_by(Server.id)
         )).all()
-    return [rt for s in servers for rt in _tools_of(s)]
+        hidden = set() if user.role == "admin" else await admin_only_tools(db)
+    return [rt for s in servers for rt in _tools_of(s) if (s.id, rt.upstream_name) not in hidden]
 
 
 def error_result(text: str) -> CallToolResult:
@@ -93,6 +102,7 @@ async def call_tool(user: User, name: str, arguments: dict[str, Any], via: str) 
     slug, _, _ = name.partition(SEP)
     async with Session() as db:
         server = await db.scalar(select(Server).where(Server.slug == slug))
+        locked = await admin_only_tools(db, server.id) if server and user.role != "admin" else set()
 
     # Checked again here, not only when listing: a client may call a tool from an old list after the server was
     # disabled, or make up a name.
@@ -104,6 +114,10 @@ async def call_tool(user: User, name: str, arguments: dict[str, Any], via: str) 
     if match is None:
         await audit.record(user, via, slug, name, ms(), "denied", "unknown tool")
         return error_result(f"Server '{slug}' has no tool called '{name}'. List the tools again.")
+    # Tool permissions: hidden from a member's list above, and refused here if they call it anyway.
+    if (server.id, match["name"]) in locked:
+        await audit.record(user, via, slug, match["name"], ms(), "denied", "admins only")
+        return error_result(f"Tool '{name}' is for admins only.")
 
     try:
         # The server's credential is added here, on the gateway. The caller's own API key is never forwarded.
