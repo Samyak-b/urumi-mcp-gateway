@@ -10,7 +10,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
+from starlette.middleware.sessions import SessionMiddleware
 
+from .api import api
 from .config import settings
 from .db import Server, Session, User, init_db, ping_db, wait_for_db
 from .security import hash_password
@@ -55,6 +57,16 @@ if not settings().session_secret:
     raise RuntimeError("SESSION_SECRET is not set")
 
 app = FastAPI(title="Team MCP Gateway", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
+# The session lives in a signed cookie (only the user id): no session table, and any replica can read it.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings().session_secret,
+    session_cookie="gw_session",
+    max_age=8 * 3600,
+    same_site="lax",
+    https_only=settings().cookie_secure,
+)
+app.include_router(api)
 
 
 @app.get("/healthz")
