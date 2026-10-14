@@ -116,7 +116,8 @@ Every outcome is one audit row: `ok`, `error`, `timeout`, `unreachable`, `denied
   WordPress; WordPress and the setup Job to MariaDB; gateway pods to woo-mcp, notes-mcp and Postgres.
   `make isolation` shows the full matrix.
 - **Probes, requests and limits** on every workload (`make workloads`). No pod gets a Kubernetes API token: nothing
-  here talks to the Kubernetes API. Our four images run as uid 10001 with a read-only root filesystem.
+  here talks to the Kubernetes API. Our four images run as uid 10001 with a read-only root filesystem; MariaDB and
+  Postgres run as their images' own users (999, 70) with no capabilities. Only WordPress starts as root.
 - **Secrets:** `make secrets` generates every value once into git-ignored files, one values file per release holding
   only that release's secrets; the charts render them into Secrets and refuse to install with an empty one
   (`required`). `make secrets-check` proves no real value is in git.
@@ -139,8 +140,11 @@ Only values (`make values-diff` prints the complete difference):
 - **Upstream credentials are stored in plain text in Postgres.** They are never returned by the API or sent to a
   client, and only the gateway can reach Postgres, but a database dump would show them. Encrypting them at rest is
   the first hardening step.
-- **No SSRF guard yet:** an admin can register any URL, including in-cluster addresses. Admins are trusted in this
-  version; THREAT_MODEL.md discusses the consequence.
+- **The SSRF guard allows internal addresses by host name**, from a list in the Helm values. A new in-cluster MCP
+  server therefore needs an operator to add its Service name there, not only an admin in the dashboard; that is
+  the point. The check resolves the name itself and httpx resolves it again to connect, so a DNS server that
+  answers differently within those milliseconds could still slip through; pinning the checked address for the
+  connection would close that, and egress NetworkPolicies would back it up.
 - **One gateway replica.** A request that arrives during a rolling update can fail briefly. Running two replicas
   needs no code change (the gateway is stateless) apart from a startup lock so two fresh pods don't both seed the
   database.
@@ -151,6 +155,7 @@ Only values (`make values-diff` prints the complete difference):
 - **Disabled servers and connected clients:** see the failure table; a client must list again.
 - **Requests with an unknown key are not audited**: there is no user to attribute them to. Revoked keys are.
 - **Outgoing traffic is not restricted**: the NetworkPolicies cover incoming traffic only.
-- **WordPress, MariaDB and Postgres run as root** inside their containers (the images' defaults); our own images
-  don't.
+- **WordPress starts as root** (the image's default): Apache binds port 80 as root and serves requests from
+  www-data workers. Running it non-root means moving Apache to port 8080 in the image's configuration; MariaDB and
+  Postgres already run non-root.
 - **notes-mcp keeps notes in memory**, so restarting it clears them.

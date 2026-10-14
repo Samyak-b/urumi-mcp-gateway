@@ -79,13 +79,16 @@ its user may use, write tools included for an admin. A malicious server also see
 tools, and can return false data.
 
 **If an admin adds a malicious or compromised server**, it can: return manipulative descriptions and results (above);
-see the arguments of calls to its own tools; and, because there is no SSRF guard yet, an admin could point the
-gateway at internal addresses (anything the gateway pod can reach, which NetworkPolicies limit in our namespaces but
-not elsewhere in the cluster or on the internet). It can **not**: obtain other servers' credentials (each is added
+and see the arguments of calls to its own tools. It can **not**: obtain other servers' credentials (each is added
 only to requests to its own server); obtain users' gateway keys (never passed through); read the gateway's database
-or the store's database directly; or act outside the tools it defines. Next steps: an SSRF guard on the URLs admins
-register (no metadata or private addresses outside the cluster's MCP services) and default-deny outgoing traffic.
-Its tools can also be made admin-only one by one while it is investigated, instead of disabling the whole server.
+or the store's database directly; act outside the tools it defines; or turn the gateway against internal addresses.
+The **SSRF guard** (`ssrf.py`) refuses any upstream URL that resolves to a private, loopback, link-local (cloud
+metadata) or other internal address, unless its host name is one of the in-cluster MCP services the operator lists in
+Helm values (`gateway.internalUpstreamHosts`), which admins can't change from the dashboard. It is checked when the
+URL is saved and again before every connection, so a name that starts resolving inwards later is caught too, and
+redirects are never followed. A compromised admin account therefore can't use the gateway to reach Postgres, MariaDB,
+the Kubernetes API or the node's metadata service. A malicious server's tools can be made admin-only one by one while
+it is investigated, instead of disabling the whole server. Next step: default-deny outgoing traffic as well.
 
 ## 4. What one team member can do to another
 
@@ -99,13 +102,14 @@ Its tools can also be made admin-only one by one while it is investigated, inste
 
 So members are isolated from each other's **identity** (keys, sessions, audit view) but not entirely from each
 other's **data**: the notes are a shared resource a member can change, and so is any store tool an admin opens to
-members. Tool permissions decide where that line is. The audit log records who did what. Admins can do more, by design: they see everyone's audit rows, can issue a key for
-another user (the key's `created_by` records the admin) and can disable anyone but themselves.
+members. Tool permissions decide where that line is. The audit log records who did what. Admins can do more, by
+design: they see everyone's audit rows, can issue a key for another user (the key's `created_by` records the admin)
+and can disable anyone but themselves.
 
 ## Other threats handled
 
-- **Stolen database dump:** API keys and invite tokens are SHA-256 hashes of 256 random bits; passwords are scrypt
-  hashes with a per-user salt. Upstream credentials are not yet encrypted at rest (see DESIGN.md, "Tradeoffs").
+- **Stolen database dump:** API keys (256 random bits) and invite tokens (192 random bits) are stored only as SHA-256
+  hashes; passwords are scrypt hashes with a per-user salt. Upstream credentials are not yet encrypted at rest (see DESIGN.md, "Tradeoffs").
 - **Dashboard sessions:** a signed, HttpOnly, SameSite=Lax cookie (HTTPS-only in production); every write must carry
   a custom header that a cross-site page can't send (CSRF); a sign-in starts a new session.
 - **Invites:** single use, 7 days, stored as hashes; the dashboard sends no Referer, so the token in the URL doesn't
@@ -116,10 +120,14 @@ another user (the key's `created_by` records the admin) and can disable anyone b
   only gateway pods, and also require a bearer token, because a NetworkPolicy matches labels and anyone who can create
   pods in `platform` could label one `gateway`.
 - **Containers:** our four images run as uid 10001 with a read-only root filesystem and no Linux capabilities.
+  MariaDB and Postgres start as their images' own users (999 and 70), never as root, with no capabilities, no
+  privilege escalation and the default seccomp profile.
+- **Server-side request forgery:** see section 3; `make test` tries cloud metadata, `localhost`, `127.0.0.1` written
+  as one number, `::ffff:127.0.0.1`, a private network and a stored internal URL.
 
 ## Known gaps
 
-Plain-text upstream credentials in Postgres; no SSRF guard; tool permissions are per role and per tool (not per
-user, not per argument); no rate limits; outgoing
-traffic unrestricted; WordPress, MariaDB and Postgres run as root; requests with unknown keys are rejected but not
-audited. Each is listed with its consequence above or in DESIGN.md.
+Plain-text upstream credentials in Postgres; tool permissions are per role and per tool (not per user, not per
+argument); no rate limits; outgoing traffic unrestricted; WordPress starts as root (Apache binds port 80; its workers
+run as www-data); requests with unknown keys are rejected but not audited. Each is listed with its consequence above
+or in DESIGN.md.
