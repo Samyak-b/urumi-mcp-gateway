@@ -118,6 +118,7 @@ remove it.
 | `make secrets-check` | No real secret value is in any tracked file or in git history; every chart ships its secrets empty |
 | `make values-diff` | Everything that changes between local and production, from the rendered charts |
 | `make upstreams` | Each upstream answers `tools/list`, checked from a gateway-labelled pod |
+| `make rollback-check` | A broken upgrade rolls itself back; the store and the platform roll back and forward with no data lost (see [Upgrades and rollback](#upgrades-and-rollback)) |
 
 ## Production-like VPS (k3s)
 
@@ -162,19 +163,56 @@ in Sealed Secrets or an External Secrets operator instead of files on one machin
 
 ## Upgrades and rollback
 
-Every `make build` gives the images a new tag, so `make deploy` changes the Deployments and Kubernetes rolls the
-pods. Each `helm upgrade` is a numbered revision:
+Each `make deploy` is one Helm **revision** per release (`store`, `notes`, `platform`), holding that release's
+chart, values and image tags. `make history` lists them. Data lives on volumes, which neither an upgrade nor a
+rollback touches.
+
+**Upgrading each part**
+
+| Part | Release | How |
+|---|---|---|
+| Gateway + dashboard | `platform` | `make build import deploy`: every build gets a new image tag, so the Deployments change and Kubernetes replaces the pods. On the VPS: push a new tag, set it in `values-prod.yaml`, `make deploy ENV=prod` |
+| woo-mcp (our MCP server) | `store` | the same; only the woo-mcp pod is replaced, WordPress and MariaDB keep running |
+| The store: PHP/Apache, MariaDB | `store` | change `wordpress.image` or `mariadb.image` in the values, `make deploy`. Stay within a MariaDB minor series (11.4.x) unless you have a backup |
+| The store: WordPress core, WooCommerce | (inside WordPress) | their files are on the WordPress volume, not in the image, so changing the image doesn't upgrade them. Take `make backup`, then update them in WordPress (Dashboard → Updates, or `wp core update` / `wp plugin update woocommerce`). `setup.wooCommerceVersion` only pins the version of a first install |
+
+`make deploy` runs with `--rollback-on-failure`: an upgrade that isn't ready within the timeout is put back on the
+last revision that worked, by Helm, while the old pods keep serving (a rolling update only removes an old pod once
+its replacement is ready).
+
+**Rolling back**
 
 ```bash
-helm history platform -n platform            # the revisions of a release
-helm rollback platform <revision> -n platform  # back to an earlier one; `make deploy` goes forward again
+make history                                  # revisions of every release
+make rollback RELEASE=platform                # back to the previous revision (or REVISION=n), waits until ready
+make deploy                                   # forward again to the last built images
 ```
 
-The store's data survives upgrades and rollbacks: MariaDB and WordPress keep their volumes, the WordPress volume
-is kept even by `helm uninstall`, and the setup Job is safe to re-run. The gateway creates its tables if they are
-missing but has no schema migrations yet (see DESIGN.md), so a release that changed the schema should not be rolled
-back past.
+A rollback is a new revision with an older revision's chart, values and image tags. What makes it safe here:
+
+- **Data stays.** Volumes aren't part of a rollback; the WordPress volume is even kept by `helm uninstall`.
+- **Old images stay available.** Tags are never reused, so an older revision still points at an image that exists
+  (in the cluster locally, in the registry on the VPS).
+- **The setup Job only runs on install and upgrade**, and it changes nothing that is already right, so moving
+  between store revisions can't reconfigure the shop.
+- **Database schemas only move forward.** A rollback brings back old code, not an old schema. The gateway only adds
+  tables (no migrations yet, see DESIGN.md); WordPress and WooCommerce migrate their tables when they upgrade. So
+  before upgrading the store, take a backup; to undo an upgrade that changed the schema, roll back and restore it:
+
+```bash
+make backup        # deploy/backups/<time>/store-mariadb.sql.gz and platform-postgres.sql.gz (git-ignored)
+gunzip -c deploy/backups/<time>/store-mariadb.sql.gz \
+  | kubectl -n store exec -i mariadb-0 -- sh -c 'mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" wordpress'
+```
+
+`make rollback-check` shows all of it on the running cluster in about two minutes: a broken upgrade (an image that
+doesn't exist) rolling itself back without the running pod ever being replaced, then the store and the platform
+rolled back to their previous images and forward again, with the storefront, the dashboard API and the gateway's
+connection to woo-mcp checked after each step and orders, products, users, servers and audit rows counted before
+and after.
 
 ## Bonus and stand-out items
 
-None are attempted in this version yet; the core comes first. This section will list each one and where to find it.
+| Item | What it does | Where | How to see it |
+|---|---|---|---|
+| #9 Upgrades and rollback | Automatic rollback of a failed upgrade, `make history` / `make rollback`, database backups, the rules that make a rollback safe | `Makefile` (`HELM_DEPLOY`, `rollback`, `backup`), `scripts/rollback-check.sh`, [Upgrades and rollback](#upgrades-and-rollback) | `make rollback-check` |

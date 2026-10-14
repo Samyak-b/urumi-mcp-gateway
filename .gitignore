@@ -3,6 +3,7 @@
 .env
 deploy/secrets/
 deploy/.last-tag
+deploy/backups/
 
 # Python
 .venv/

@@ -19,6 +19,7 @@
 #   make test      end-to-end test without Kubernetes: real gateway and MCP servers, fake store, slow server, LLM
 #   make history   the last revisions of every release (each `make deploy` is one)
 #   make rollback RELEASE=store|notes|platform [REVISION=n]   back to revision n (default: the previous one)
+#   make backup    dump both databases into deploy/backups/<time>/ (git-ignored); take one before upgrading the store
 #   make rollback-check  a broken upgrade rolls itself back; store + platform rolled back and forward, data kept
 #   make logs-setup follow the store setup Job
 #   make down      delete the local cluster (all data goes with it)
@@ -60,7 +61,7 @@ NS_store    := store
 NS_notes    := tools
 NS_platform := platform
 
-.PHONY: help up tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff smoke test logs-setup down history rollback rollback-check
+.PHONY: help up tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff smoke test logs-setup down history rollback rollback-check backup
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -132,6 +133,15 @@ rollback:
 	@case "$(RELEASE)" in store|notes|platform) ;; *) echo "usage: make rollback RELEASE=store|notes|platform [REVISION=n]"; exit 1;; esac
 	helm rollback $(RELEASE) $(REVISION) -n $(NS_$(RELEASE)) --wait --timeout 10m
 	helm history $(RELEASE) -n $(NS_$(RELEASE)) --max 3
+
+# Both databases, dumped into deploy/backups/<time>/ (git-ignored). Take one before upgrading the store: WordPress
+# and WooCommerce upgrade their database schema, and a Helm rollback can't undo that. Restoring is in the README.
+backup:
+	@d=deploy/backups/$$(date +%Y%m%d-%H%M%S); mkdir -p $$d; \
+	kubectl -n store exec mariadb-0 -- sh -c 'mariadb-dump -uroot -p"$$MARIADB_ROOT_PASSWORD" --single-transaction wordpress' \
+	  | gzip > $$d/store-mariadb.sql.gz; \
+	kubectl -n platform exec postgres-0 -- pg_dump -U gateway gateway | gzip > $$d/platform-postgres.sql.gz; \
+	ls -lh $$d
 
 # A broken upgrade rolling itself back, then the store and the platform rolled back and forward with their data
 # counted before and after (see the script's header). Takes a few minutes; ends where it started.
