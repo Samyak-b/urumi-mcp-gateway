@@ -47,12 +47,15 @@ postgres:
 
 # Registered on the gateway's first start, in this order (WooCommerce first). After that the dashboard owns
 # them: edits made there are never overwritten. Credentials are looked up in secrets.<credentialSecretKey>.
+# adminOnlyTools: tools only admins may list and call (members can read orders, but not create products or
+# change order status). Admins change the list on the Servers page afterwards.
 seedServers:
   - slug: woo
     name: WooCommerce store
     url: http://woo-mcp.store.svc.cluster.local:8000/mcp
     authType: bearer
     credentialSecretKey: wooMcpToken
+    adminOnlyTools: [create_product, update_order_status]
   - slug: notes
     name: Team notes
     url: http://notes-mcp.tools.svc.cluster.local:8000/mcp

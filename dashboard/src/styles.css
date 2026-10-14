@@ -94,6 +94,8 @@ tr:last-child td { border-bottom: 0; }
 .server-meta { margin: 6px 0 0; font-size: 13px; }
 .tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .tool { font-family: var(--mono); font-size: 12px; padding: 3px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); }
+button.tool { color: var(--ink); line-height: inherit; }
+.tool.locked { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
 .server.off .tools { opacity: 0.5; }
 
 /* code blocks */

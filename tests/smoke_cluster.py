@@ -197,6 +197,16 @@ def main() -> int:
     check("one task that needs two servers (woo, then notes) in one session", not orders.isError and not note.isError,
           text(note)[:60].replace("\n", " "))
 
+    # Tool permissions: whatever an admin marked admin-only is neither listed for B nor callable by B. Called with
+    # no arguments, so even a wrongly allowed call would only fail validation upstream, never change the store.
+    locked = [t["name"] for s in a.json("GET", "/servers") for t in s["tools"] if t.get("admin_only")]
+    if not locked:
+        print("skip  tool permissions: no tool is admin-only (click one on the Servers page to lock it)")
+    else:
+        check("B isn't listed the admin-only tools", not set(locked) & names, ", ".join(locked))
+        r = asyncio.run(call(key, locked[0], {}))
+        check(f"B calling {locked[0]} directly is refused", r.isError and "admins only" in text(r), text(r)[:60])
+
     section("Team and control")
     notes = a.server("notes")
     a.json("PATCH", f"/servers/{notes['id']}", {"enabled": False})

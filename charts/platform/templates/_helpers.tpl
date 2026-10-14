@@ -13,6 +13,7 @@ helm.sh/chart: {{ .root.Chart.Name }}-{{ .root.Chart.Version }}
 {{- range .Values.seedServers -}}
 {{- $s := dict "slug" .slug "name" .name "url" .url "auth_type" (.authType | default "none") -}}
 {{- if .authHeader }}{{- $_ := set $s "auth_header" .authHeader -}}{{- end -}}
+{{- if .adminOnlyTools }}{{- $_ := set $s "admin_only_tools" .adminOnlyTools -}}{{- end -}}
 {{- if .credentialSecretKey -}}
 {{- $cred := index $.Values.secrets .credentialSecretKey -}}
 {{- $_ := set $s "credential" (required (printf "secrets.%s is required for seed server %s (run make secrets)" .credentialSecretKey .slug) $cred) -}}

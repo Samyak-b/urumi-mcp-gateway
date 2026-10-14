@@ -79,6 +79,13 @@ function ServerCard({ s, isAdmin, onEdit, act }) {
       act(() => api(`/servers/${s.id}`, { method: "DELETE" }));
     }
   };
+  // The API takes the upstream's own tool names ("create_product"); the cards show "woo__create_product".
+  const toggle = (t) => {
+    const own = (name) => name.slice(s.slug.length + 2);
+    const locked = s.tools.filter((x) => x.admin_only).map((x) => own(x.name));
+    const next = t.admin_only ? locked.filter((n) => n !== own(t.name)) : [...locked, own(t.name)];
+    act(() => api(`/servers/${s.id}`, { method: "PATCH", body: { admin_only_tools: next } }));
+  };
   return (
     <div className={`card server ${s.status !== "connected" ? "off" : ""}`}>
       <div className="server-head">
@@ -100,8 +107,19 @@ function ServerCard({ s, isAdmin, onEdit, act }) {
         {s.status === "unreachable" && s.tools.length > 0 && " · last known tools, hidden from clients"}
       </p>
       <div className="tools">
-        {s.tools.map((t) => <span key={t.name} className="tool" title={t.description}>{t.name}</span>)}
+        {s.tools.map((t) =>
+          isAdmin ? (
+            // Admins click a tool to switch it between "every member" and "admins only".
+            <button key={t.name} className={`tool ${t.admin_only ? "locked" : ""}`} onClick={() => toggle(t)}
+                    title={`${t.description}\n\n${t.admin_only ? "Admins only. Click to allow members." : "Every member. Click to make it admins only."}`}>
+              {t.admin_only && "🔒 "}{t.name}
+            </button>
+          ) : (
+            <span key={t.name} className="tool" title={t.description}>{t.name}</span>
+          )
+        )}
       </div>
+      {isAdmin && s.tools.length > 0 && <p className="server-meta muted">Click a tool to make it admins only (🔒) or open it to members.</p>}
       {isAdmin && (
         <div className="actions" style={{ marginTop: 14 }}>
           <button onClick={onEdit}>Edit</button>
