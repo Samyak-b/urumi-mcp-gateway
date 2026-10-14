@@ -27,6 +27,13 @@ mariadb:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: 500m, memory: 512Mi }
 
+wordpress:
+  image: wordpress:php8.3-apache
+  size: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 768Mi }
+
 # Rendered into Kubernetes Secrets. The chart refuses to install while any of them is empty.
 secrets:
   dbRootPassword: ""

@@ -16,3 +16,6 @@ storage:
 
 mariadb:
   size: 10Gi
+
+wordpress:
+  size: 10Gi
