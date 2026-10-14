@@ -15,6 +15,7 @@
 #   make secrets-check prove no real secret value is in any tracked file or in git history
 #   make values-diff   everything that changes between local and prod (rendered charts, secrets left out)
 #   make smoke     the definition of done with two users, against the live cluster (SKIP_CHAT=1: no LLM calls)
+#   make test      end-to-end test without Kubernetes: real gateway and MCP servers, fake store, slow server, LLM
 #   make logs-setup follow the store setup Job
 #   make down      delete the local cluster (all data goes with it)
 #
@@ -48,7 +49,7 @@ endif
 
 HELM_DEPLOY := helm upgrade --install --create-namespace --wait --timeout 20m
 
-.PHONY: help tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff smoke logs-setup down
+.PHONY: help tools cluster secrets build import lint deploy creds status isolation upstreams workloads secrets-check values-diff smoke test logs-setup down
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -151,3 +152,7 @@ smoke:
 	  -v "$$PWD/tests:/tests:ro" -e KUBECONFIG=/kube/config -e HOME=/tmp \
 	  -e ADMIN_EMAIL="$${email:-admin@example.com}" -e ADMIN_PASSWORD="$$GATEWAY_ADMIN_PASSWORD" -e SKIP_CHAT="$${SKIP_CHAT:-}" \
 	  urumi/gateway:$(TAG) python /tests/smoke_cluster.py
+
+# Runs in the gateway image, which has every dependency the gateway and the MCP servers need. No cluster needed.
+test:
+	docker run --rm -v "$$PWD:/repo:ro" -w /repo -e HOME=/tmp urumi/gateway:$(TAG) python tests/test_e2e.py
