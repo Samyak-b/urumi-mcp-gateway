@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { api } from "./api.js";
 import Login from "./pages/Login.jsx";
 import Join from "./pages/Join.jsx";
+import Servers from "./pages/Servers.jsx";
+
+const VIEWS = { servers: Servers };
 
 // Pages are chosen by the URL hash (#/servers, #/join/<token>): no router library, and the nginx container only
 // ever serves index.html.
@@ -66,6 +69,7 @@ export default function App() {
   );
 }
 
-function Page({ id }) {
-  return <p className="muted">The {id} page is coming next.</p>;
+function Page({ id, me }) {
+  const View = VIEWS[id];
+  return View ? <View me={me} /> : <p className="muted">The {id} page is coming next.</p>;
 }
