@@ -10,8 +10,8 @@ jobs:
     name: End-to-end test (gateway, MCP servers, fakes)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -23,8 +23,8 @@ jobs:
     name: Helm lint (local and prod values)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
       - name: Generate throwaway secrets
         run: bash scripts/gen-secrets.sh
       - name: Lint every chart with both value sets
@@ -38,7 +38,7 @@ jobs:
     name: Build images and the dashboard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build every image (the dashboard image runs npm ci and vite build)
         run: |
           for pair in gateway:services/gateway woo-mcp:services/woo-mcp notes-mcp:services/notes-mcp dashboard:dashboard; do
