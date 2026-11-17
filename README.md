@@ -1,225 +1,314 @@
-# WooCommerce hosting with a team MCP gateway
+# Team MCP Gateway on Kubernetes
 
-A WooCommerce store on Kubernetes, an MCP server we wrote for it, and a **team MCP gateway**: an admin connects
-MCP servers once in a dashboard, and every team member then uses all of them through **one MCP endpoint** (for
-Claude Code, Cursor, MCP Inspector) and through a **chat agent** in the dashboard. Everything runs in the cluster
-and is deployed with Helm; the same charts run locally (k3d) and on a VPS (k3s) with only values changing.
+One MCP endpoint for a whole team: an admin connects MCP servers once, and every member uses all of their tools
+from Claude Code, Cursor or a built-in chat agent, with per-user keys, role-based tool permissions and an audit log.
 
-```
-Browser ──► Traefik (Ingress)
-              ├─ store.localhost ─────► WordPress + WooCommerce ──► MariaDB          namespace store
-              └─ dashboard.localhost ─► dashboard (React)                            namespace platform
-                                   ├─► gateway  /api (dashboard), /mcp (MCP clients) ──► Postgres
-                                   │      │ MCP client of every registered server
-                                   │      ├──► woo-mcp ──► WooCommerce REST API       namespace store
-                                   │      ├──► notes-mcp                              namespace tools
-                                   │      └──► DeepWiki (public internet)
-Claude Code / Cursor ──────────────┘   one URL + the user's own API key
-```
+> Built as a take-home assignment (Urumi AI, Forward Deployed Engineer internship, round 1): a WooCommerce
+> store on Kubernetes with a team MCP gateway in front of it. Developed with AI assistance (Claude Code).
 
-| Doc | What's in it |
+## Overview
+
+MCP servers give AI assistants tools, but each server has its own URL and credential, and every person has to
+configure every server. Sharing those credentials across a team means nobody knows who did what, and anyone can
+use every tool.
+
+This project puts a gateway in front of the servers:
+
+- **One endpoint.** Members point their MCP client at the gateway with their own API key and get the tools of
+  every enabled server, named `<server>__<tool>`.
+- **Credentials stay on the server.** The gateway adds each upstream's credential itself; members never see it,
+  and their own key is never forwarded upstream.
+- **Control and accountability.** Admins enable, disable and restrict servers and tools; every tool call is
+  audited under the user who made it.
+
+The repository also contains a WooCommerce store, an MCP server for it written from scratch, a second in-cluster
+MCP server, and Helm charts that deploy everything to a local k3d cluster or a k3s server.
+
+## Key features
+
+| Feature | Where |
 |---|---|
-| [docs/DESIGN.md](docs/DESIGN.md) | System design and tradeoffs: components, how a tool call travels, aggregation, routing, failure handling, what changes for production |
-| [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Shared upstream credentials, why client tokens aren't passed through, untrusted upstreams, what one member can do to another |
+| Single MCP endpoint (Streamable HTTP, stateless JSON) aggregating 3 upstream servers and 12 tools | `services/gateway/app/mcp_endpoint.py`, `router.py` |
+| Name-collision-safe routing: `<slug>__<tool>`, slugs cannot contain `_` | `router.py` (`exposed_name`, `call_tool`) |
+| Cached tool lists from a background health check, so a slow or dead upstream never blocks listing | `health.py`, `router.py` (`routable_tools`) |
+| Per-call timeouts (30 s) and clear `timeout` / `unreachable` / `error` results; dead servers marked Unreachable immediately | `upstream.py`, `router.py` |
+| Per-user API keys (shown once, stored as SHA-256 hashes, revocable) | `security.py`, `api.py` |
+| Two roles (admin, member) and per-tool permissions: admin-only tools are hidden from members and refused if called | `router.py`, `db.py` (`AdminOnlyTool`) |
+| Audit log of every tool call: user, source, server, tool, duration, outcome | `audit.py`, `db.py` (`AuditLog`) |
+| Chat agent with an LLM tool loop that acts as the signed-in user, through the same routing and audit path | `chat.py` |
+| SSRF guard on upstream URLs (checked on save and before every connection) | `ssrf.py` |
+| React dashboard: servers, chat, API keys, team and invites, audit log | `dashboard/src/pages/` |
+| WooCommerce MCP server: products and orders through the WooCommerce REST API (5 tools) | `services/woo-mcp/` |
+| Helm charts with local and production values, default-deny NetworkPolicies, probes and limits on every workload, automatic rollback of failed upgrades | `charts/`, `Makefile` |
 
-## Repository layout
+## Architecture
 
-| Path | What |
+```mermaid
+flowchart LR
+    subgraph clients[Clients]
+        mcpc["MCP client<br/>(Claude Code, Cursor)"]
+        browser["Browser"]
+    end
+
+    traefik["Traefik Ingress<br/>dashboard.localhost / store.localhost"]
+
+    subgraph platform["namespace: platform"]
+        dash["Dashboard<br/>(React, nginx)"]
+        subgraph gw["Gateway (FastAPI)"]
+            auth["Auth<br/>API key hash / session cookie"]
+            router["Router<br/>roles + per-tool permissions"]
+            chat["Chat agent<br/>(LLM tool loop)"]
+            health["Health check<br/>+ tool cache"]
+            audit["Audit log"]
+        end
+        pg[("Postgres<br/>users, key hashes, servers,<br/>permissions, audit log")]
+    end
+
+    subgraph store["namespace: store"]
+        woo["woo-mcp"]
+        wp["WordPress +<br/>WooCommerce"]
+        maria[("MariaDB")]
+    end
+
+    subgraph tools["namespace: tools"]
+        notes["notes-mcp"]
+    end
+
+    deepwiki["DeepWiki MCP<br/>(public internet)"]
+    llm["LLM provider<br/>(OpenAI-compatible API)"]
+
+    mcpc -- "/mcp + API key" --> traefik
+    browser --> traefik
+    traefik -- "/" --> dash
+    traefik -- "/api, /mcp" --> auth
+    traefik --> wp
+    auth --> router
+    chat --> router
+    chat --> llm
+    router --> audit
+    router -- "server credential" --> woo
+    router -- "server credential" --> notes
+    router -- "SSRF-checked" --> deepwiki
+    health --> woo
+    health --> notes
+    health --> deepwiki
+    auth --> pg
+    router --> pg
+    audit --> pg
+    woo -- "REST API" --> wp
+    wp --> maria
+```
+
+Each namespace denies all incoming traffic by default; only gateway pods can reach the MCP servers and Postgres.
+The full design (how a tool call travels, failure handling, tradeoffs) is in [docs/DESIGN.md](docs/DESIGN.md).
+
+## Tech stack
+
+| Area | Technology |
 |---|---|
-| `services/gateway` | The gateway: dashboard API, the `/mcp` endpoint, routing, health checks, audit log, chat agent (Python, FastAPI, MCP SDK) |
-| `services/woo-mcp` | Our WooCommerce MCP server (Python, MCP SDK) |
-| `services/notes-mcp` | A small team-notes MCP server, the second in-cluster upstream |
-| `dashboard/` | React dashboard (Vite), served by a non-root nginx |
-| `charts/store`, `charts/notes-mcp`, `charts/platform` | One Helm chart per part, each with `values.yaml`, `values-local.yaml`, `values-prod.yaml` |
-| `deploy/` | k3d cluster config, the production ClusterIssuer, generated git-ignored secrets |
-| `scripts/` | Secret generation and the checks behind the `make` targets |
-| `tests/` | `test_e2e.py` (no cluster needed) and `smoke_cluster.py` (live cluster) |
+| Gateway | Python 3.12, FastAPI 0.143, Uvicorn, MCP Python SDK 1.30, SQLAlchemy 2.1 (async), httpx, pydantic-settings |
+| MCP servers | Python, MCP SDK (FastMCP), WooCommerce REST API (v3) |
+| Dashboard | React 19, Vite 8, served by nginx-unprivileged |
+| Data | Postgres 16 (gateway), MariaDB 11.4 (store), SQLite in tests |
+| Store | WordPress (PHP 8.3, Apache), WooCommerce, wp-cli setup job |
+| Platform | Kubernetes (k3d locally, k3s for production), Helm 4, Traefik, cert-manager (production TLS) |
+| Tooling | Make, Docker, GitHub Actions |
 
-## Local setup
+## Quickstart
 
-**You need:** Docker (on Windows: Docker Desktop with WSL integration, and run everything in the WSL Ubuntu shell),
-[k3d](https://k3d.io), [kubectl](https://kubernetes.io/docs/tasks/tools/), [Helm](https://helm.sh/docs/intro/install/)
-and `make`. About 4 GB of free memory for the cluster.
+### Requirements
+
+Docker, [k3d](https://k3d.io), kubectl, [Helm](https://helm.sh), openssl and make. On Windows, run everything in
+WSL 2 (Ubuntu) with Docker Desktop's WSL integration enabled. About 4 GB of free memory.
+Tested with k3d 5.9.0 (k3s v1.35.5), Helm v4.3.0.
 
 ```bash
-cp .env.example .env     # fill in the LLM settings for the chat agent (optional) and the admin email
-make up                  # cluster, secrets, images, deploy: about 10 minutes the first time
-make creds               # the dashboard and WordPress admin logins
+make tools          # checks the tools above are installed and Docker is running
 ```
 
-Then open **http://store.localhost** (the shop) and **http://dashboard.localhost** (the gateway). `make help`
-lists every command. After a code change: `make build import deploy`. To start over: `make down && make up`.
-
-What `make up` does, step by step:
-
-| Step | What happens |
-|---|---|
-| `make cluster` | Creates the k3d cluster `urumi`: k3s in Docker, with Traefik published on ports 80/443 |
-| `make secrets` | Generates every password and token into `deploy/secrets/` (git-ignored), once; re-running keeps them |
-| `make build import` | Builds the four images with a fresh tag and copies them into the cluster |
-| `make deploy` | `helm upgrade --install` of the `store`, `notes` and `platform` releases, waiting until they are ready |
-
-The store installs itself: a Helm hook Job installs WordPress and WooCommerce, enables Cash on delivery, creates
-the shop pages and three products, and registers the MCP server's API key. It runs again on every upgrade and
-changes nothing that is already right.
-
-### Local domains
-
-`store.localhost` and `dashboard.localhost` need no setup: browsers resolve every `*.localhost` name to the local
-machine (RFC 6761), k3d publishes Traefik on ports 80 and 443, and Traefik routes by host name. For tools that
-don't resolve `*.localhost` themselves: `curl --resolve store.localhost:80:127.0.0.1 http://store.localhost`.
-
-## Using it
-
-**Place an order.** Open http://store.localhost, add a product to the cart, check out and choose **Cash on
-delivery**. The order appears in http://store.localhost/wp-admin under WooCommerce → Orders (login from
-`make creds`).
-
-**Invite a teammate.** In the dashboard, **Team** → invite an email as member and send them the link. They choose a
-password, and can then create their own API key under **Connect a client**.
-
-**Connect an external MCP client** with only the gateway URL and your key (the Connect page shows these lines with
-your key filled in):
+### Run on a local Kubernetes cluster (k3d + Helm)
 
 ```bash
-# Claude Code
-claude mcp add --transport http team-gateway http://dashboard.localhost/mcp --header "Authorization: Bearer mcpgw_..."
+git clone https://github.com/Samyak-b/urumi-mcp-gateway.git
+cd urumi-mcp-gateway
+cp .env.example .env    # optional: fill in LLM_BASE_URL, LLM_MODEL, LLM_API_KEY for the chat agent
+make up                 # cluster, secrets, image builds, Helm lint and deploy (about 10 minutes the first time)
+make creds              # prints the dashboard and WordPress logins
 ```
 
-```json
-// Cursor: .cursor/mcp.json
-{ "mcpServers": { "team-gateway": { "url": "http://dashboard.localhost/mcp",
-                                    "headers": { "Authorization": "Bearer mcpgw_..." } } } }
+Then open:
+
+- http://dashboard.localhost: the gateway dashboard (sign in with the credentials from `make creds`)
+- http://store.localhost: the WooCommerce storefront
+
+`*.localhost` resolves to your own machine in browsers, so no hosts-file changes are needed.
+After a code change: `make build import deploy`. To start over: `make down && make up`.
+
+### Connect an MCP client
+
+In the dashboard, open **Connect a client**, create an API key, then for example:
+
+```bash
+claude mcp add --transport http team-gateway http://dashboard.localhost/mcp \
+  --header "Authorization: Bearer <your key>"
 ```
 
-MCP Inspector: `npx @modelcontextprotocol/inspector`, transport **Streamable HTTP**, URL
-`http://dashboard.localhost/mcp`, header `Authorization: Bearer mcpgw_...`.
+### Run without Kubernetes (tests only)
 
-The client sees the tools of every enabled server, named `<server>__<tool>` (`woo__list_orders`,
-`notes__add_note`, `deepwiki__ask_wiki_question`). It never needs the servers' own credentials.
+There is no standalone run mode. The end-to-end test starts the real gateway and MCP servers in one container,
+with fakes for WooCommerce and the LLM:
 
-**Use the chat agent.** Dashboard → **Chat**, then ask "What orders came in today?" or "Create a product called
-Linen Apron for 24.00". The tools it called are shown above each answer, and every call is in the **Audit log**
-under your name with source *Chat*. It needs `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY` in `.env` (any
-OpenAI-compatible endpoint with tool calling), then `make secrets deploy`.
+```bash
+make build    # once, builds the images
+make test
+```
 
-**Manage servers.** Dashboard → **Servers**: status (Connected / Unreachable with the reason / Disabled) and tools
-of every server; admins add a server by URL with an optional bearer token or custom header, edit, disable or
-remove it.
+### Production-like server (k3s)
 
-**Tool permissions.** On the Servers page an admin clicks a tool to make it **admins only** (🔒) or open it to
-members again. A member's MCP client and chat aren't offered locked tools, and calling one directly is refused and
-audited as `denied`. A fresh install locks WooCommerce's `create_product` and `update_order_status`: members can
-read products and orders, only admins change the store.
+The same charts with `values-prod.yaml` (`make values-diff` shows every difference). This path has been linted
+and rendered but not yet run on a server.
 
-## Checks and tests
-
-| Command | What it shows |
-|---|---|
-| `make test` | End-to-end test without Kubernetes: real gateway and MCP servers, a fake WooCommerce, a slow server and a scripted LLM. Routing, name collisions, timeouts, dead upstreams, revoked keys, credentials never leaving the gateway, the audit log. Also runs in CI |
-| `make smoke` | The assignment's definition of done with two users, against the live cluster: order, chat, external MCP client, revoke, disable, kill a pod, audit attribution. Leaves its test data behind, so run it before resetting for a demo |
-| `make isolation` | What is public (the two Ingress hosts) and that every internal service, databases included, is reachable only from the pods that need it |
-| `make workloads` | Every workload has readiness and liveness probes, requests and limits |
-| `make secrets-check` | No real secret value is in any tracked file or in git history; every chart ships its secrets empty |
-| `make values-diff` | Everything that changes between local and production, from the rendered charts |
-| `make upstreams` | Each upstream answers `tools/list`, checked from a gateway-labelled pod |
-| `make rollback-check` | A broken upgrade rolls itself back; the store and the platform roll back and forward with no data lost (see [Upgrades and rollback](#upgrades-and-rollback)) |
-
-## Production-like VPS (k3s)
-
-The same charts, with `values-prod.yaml` instead of `values-local.yaml`. `make values-diff` shows exactly what that
-changes: hosts and URLs, TLS from cert-manager, storage class and sizes, registry images, secure cookies. This
-version has been linted and rendered with the production values but not yet run on a VPS.
-
-1. **A VPS** with Ubuntu, 2 vCPUs and 4 GB of RAM or more, ports 80 and 443 open, and two DNS records pointing at it,
-   e.g. `store.example.com` and `app.example.com`.
-2. **k3s** (it brings Traefik and the local-path storage class), then copy its kubeconfig to your machine:
+1. A Linux server with 2 vCPUs, 4 GB RAM, ports 80/443 open, and DNS records for the store and dashboard hosts.
+2. Install k3s and copy its kubeconfig to your machine (replace `127.0.0.1` with the server address):
    ```bash
    curl -sfL https://get.k3s.io | sh -
-   sudo cat /etc/rancher/k3s/k3s.yaml     # save as ~/.kube/vps.yaml, replacing 127.0.0.1 with the VPS address
+   sudo cat /etc/rancher/k3s/k3s.yaml
    ```
-3. **cert-manager** and the Let's Encrypt issuer (put your email in `deploy/prod/cluster-issuer.yaml` first):
+3. Install cert-manager and the Let's Encrypt issuer (set your email in `deploy/prod/cluster-issuer.yaml` first):
    ```bash
    export KUBECONFIG=~/.kube/vps.yaml
    helm install cert-manager cert-manager --repo https://charts.jetstack.io -n cert-manager --create-namespace --set crds.enabled=true
    kubectl apply -f deploy/prod/cluster-issuer.yaml
    ```
-4. **Images** in a registry the VPS can pull from. The prod values point at `ghcr.io/samyak-b/*:0.1.0`:
+4. Push the four images to a registry the server can pull from, and set them in the `values-prod.yaml` files.
+5. Set your hosts in `charts/store/values-prod.yaml` and `charts/platform/values-prod.yaml`.
+6. Generate secrets and deploy:
    ```bash
-   for pair in gateway:services/gateway woo-mcp:services/woo-mcp notes-mcp:services/notes-mcp dashboard:dashboard; do
-     docker build -t ghcr.io/samyak-b/${pair%%:*}:0.1.0 ${pair#*:} && docker push ghcr.io/samyak-b/${pair%%:*}:0.1.0
-   done
-   ```
-   Make the packages public on GitHub (the charts don't use an image pull secret), and build on, or for, the VPS's
-   CPU architecture.
-5. **Your domains** in `charts/store/values-prod.yaml` (`store.host`, `store.url`) and
-   `charts/platform/values-prod.yaml` (`host`, `publicUrl`).
-6. **Secrets and deploy**, from your machine:
-   ```bash
-   make secrets                                   # the same generator; keep deploy/secrets/ safe
+   make secrets
    KUBECONFIG=~/.kube/vps.yaml make lint deploy ENV=prod
    ```
 
-What differs from local, and why: real hosts instead of `*.localhost`; TLS certificates from Let's Encrypt (the
-charts also let the ACME solver through their default-deny NetworkPolicies); the session cookie is HTTPS-only;
-bigger volumes on k3s's local-path class (a cloud or replicated storage class is a values change); images from a
-registry instead of `k3d image import`. Secrets come from the same generated files; a larger team would keep them
-in Sealed Secrets or an External Secrets operator instead of files on one machine.
+### Upgrades and rollback
 
-## Upgrades and rollback
+Every `make deploy` is a Helm revision per release and rolls back automatically if it doesn't become ready.
+`make history` lists revisions, `make rollback RELEASE=<store|notes|platform> [REVISION=n]` goes back, and
+`make backup` dumps both databases before a store upgrade (WordPress and WooCommerce migrate their schema, which a
+rollback can't undo).
 
-Each `make deploy` is one Helm **revision** per release (`store`, `notes`, `platform`), holding that release's
-chart, values and image tags. `make history` lists them. Data lives on volumes, which neither an upgrade nor a
-rollback touches.
+## Configuration
 
-**Upgrading each part**
+Hand-filled settings go in `.env` (git-ignored). Passwords and tokens are never written by hand:
+`make secrets` generates them into `deploy/secrets/` (git-ignored), and Helm delivers them as Kubernetes Secrets.
 
-| Part | Release | How |
+`.env`:
+
+| Variable | Purpose |
+|---|---|
+| `LLM_BASE_URL` | OpenAI-compatible API base URL for the chat agent, e.g. `https://api.example.com/v1` |
+| `LLM_MODEL` | model name; must support tool calling |
+| `LLM_API_KEY` | API key for that provider (stored as a Kubernetes Secret) |
+| `ADMIN_EMAIL` | email of the first dashboard admin |
+
+Gateway environment (set by the Helm chart from values and Secrets; defaults in `services/gateway/app/config.py`):
+
+| Variable | Default | Purpose |
 |---|---|---|
-| Gateway + dashboard | `platform` | `make build import deploy`: every build gets a new image tag, so the Deployments change and Kubernetes replaces the pods. On the VPS: push a new tag, set it in `values-prod.yaml`, `make deploy ENV=prod` |
-| woo-mcp (our MCP server) | `store` | the same; only the woo-mcp pod is replaced, WordPress and MariaDB keep running |
-| The store: PHP/Apache, MariaDB | `store` | change `wordpress.image` or `mariadb.image` in the values, `make deploy`. Stay within a MariaDB minor series (11.4.x) unless you have a backup |
-| The store: WordPress core, WooCommerce | (inside WordPress) | their files are on the WordPress volume, not in the image, so changing the image doesn't upgrade them. Take `make backup`, then update them in WordPress (Dashboard → Updates, or `wp core update` / `wp plugin update woocommerce`). `setup.wooCommerceVersion` only pins the version of a first install |
+| `DATABASE_URL` | SQLite file | Postgres URL in the cluster |
+| `SESSION_SECRET` | none (required) | signs dashboard session cookies |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | `admin@example.com`, none | first admin, created when there are no users |
+| `PUBLIC_URL` | `http://dashboard.localhost` | shown MCP URL and invite links |
+| `COOKIE_SECURE` | `false` | HTTPS-only cookie in production |
+| `SEED_SERVERS` | `[]` | JSON list of servers registered on first start (from a Secret) |
+| `INTERNAL_UPSTREAM_HOSTS` | empty | host names allowed to resolve to internal addresses (SSRF allow-list) |
+| `UPSTREAM_CALL_TIMEOUT_S` / `UPSTREAM_PROBE_TIMEOUT_S` | `30` / `5` | per tool call / per health check |
+| `HEALTH_INTERVAL_S` | `10` | health check interval |
+| `MAX_BODY_BYTES` | `1000000` | largest `/mcp` request |
+| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | empty | chat agent provider |
+| `LLM_TIMEOUT_S` / `CHAT_MAX_STEPS` | `60` / `8` | LLM call timeout / tool-loop rounds per message |
+| `STORE_TIMEZONE` | `UTC` | the chat agent's notion of "today" |
 
-`make deploy` runs with `--rollback-on-failure`: an upgrade that isn't ready within the timeout is put back on the
-last revision that worked, by Helm, while the old pods keep serving (a rolling update only removes an old pod once
-its replacement is ready).
+MCP servers: `MCP_TOKEN` (bearer token the gateway must present), `PORT`, `LOG_LEVEL`; woo-mcp also
+`WOO_BASE_URL`, `WOO_CONSUMER_KEY`, `WOO_CONSUMER_SECRET`, `STORE_PUBLIC_URL`, `STORE_TIMEZONE`.
 
-**Rolling back**
+## Security model
 
-```bash
-make history                                  # revisions of every release
-make rollback RELEASE=platform                # back to the previous revision (or REVISION=n), waits until ready
-make deploy                                   # forward again to the last built images
+- **Authentication.** Dashboard: signed HttpOnly session cookie, plus a required custom header on every write
+  (CSRF). MCP clients: per-user API keys, stored as SHA-256 hashes and checked on every request; revoking a key
+  takes effect on the next request. Passwords: scrypt with a per-user salt. Invites: single-use, 7 days, hashed.
+- **Roles.** `admin` manages servers, members, keys and permissions and sees the whole audit log; `member` uses
+  tools, manages their own keys and sees their own audit rows.
+- **Per-tool permissions.** Any tool can be made admin-only. Members are not offered it (MCP clients and chat) and
+  a direct call is refused and audited as `denied`. A fresh install locks WooCommerce's write tools.
+- **Credential isolation.** Upstream credentials are write-only through the API, added by the gateway on the
+  server side, never sent to browsers or MCP clients; client keys are never forwarded upstream.
+- **SSRF protection.** Upstream URLs that resolve to private, loopback, link-local (cloud metadata) or other
+  internal addresses are refused unless the host is on an operator-controlled allow-list in Helm values; checked
+  on save and before every connection; redirects are not followed.
+- **Network isolation.** Default-deny NetworkPolicies; only gateway pods reach the MCP servers and Postgres, and
+  the MCP servers also require a bearer token. Only the two Ingress hosts are public.
+- **Containers.** Gateway, dashboard and MCP server images run as non-root with a read-only root filesystem and
+  no Linux capabilities; MariaDB and Postgres run as non-root; no pod gets a Kubernetes API token.
+- **Untrusted upstreams.** Tool descriptions and results are length-capped and prefixed with their server's name,
+  and the chat agent is instructed to treat them as data.
+
+The full threat model is in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+
+## Testing
+
+| Command | What it covers |
+|---|---|
+| `make test` | 47 end-to-end checks without Kubernetes: the real gateway and MCP servers with fakes for WooCommerce, a slow server and a scripted LLM. Routing and name collisions, timeouts, dead upstreams, revoked keys, tool permissions, SSRF guard, credential isolation, chat as the user, audit log. Runs in GitHub Actions |
+| `make smoke` | The full flow with two users against the live cluster (up to 27 checks; `SKIP_CHAT=1` skips the 7 that need the LLM): store order, chat, external MCP client, two-server task, permissions, disable, killed pod, revoked key, audit attribution |
+| `make isolation` | Which pods can reach which internal services (NetworkPolicies) |
+| `make workloads` | Probes, requests and limits on every workload |
+| `make secrets-check` | No generated secret appears in any tracked file or in git history |
+| `make values-diff` | Everything that differs between local and production values |
+| `make rollback-check` | A failed upgrade rolling itself back, and rollbacks with no data lost |
+
+CI (`.github/workflows/ci.yml`) runs the end-to-end test, Helm lint with both value sets plus a secret scan, and
+image builds on every push.
+
+## Project structure
+
+```
+services/
+  gateway/        FastAPI gateway: /api (dashboard), /mcp (MCP endpoint), routing, health checks, audit, chat agent
+  woo-mcp/        MCP server for WooCommerce (REST API)
+  notes-mcp/      small team-notes MCP server
+dashboard/        React dashboard (Vite)
+charts/
+  store/          WordPress, WooCommerce, MariaDB, woo-mcp, setup job
+  notes-mcp/      notes-mcp
+  platform/       gateway, dashboard, Postgres, Ingress
+deploy/           k3d cluster config, production ClusterIssuer
+scripts/          secret generation and the checks behind the make targets
+tests/            end-to-end test, live-cluster smoke test, fakes
+docs/             DESIGN.md, THREAT_MODEL.md
+Makefile          every command (make help)
 ```
 
-A rollback is a new revision with an older revision's chart, values and image tags. What makes it safe here:
+## Screenshots
 
-- **Data stays.** Volumes aren't part of a rollback; the WordPress volume is even kept by `helm uninstall`.
-- **Old images stay available.** Tags are never reused, so an older revision still points at an image that exists
-  (in the cluster locally, in the registry on the VPS).
-- **The setup Job only runs on install and upgrade**, and it changes nothing that is already right, so moving
-  between store revisions can't reconfigure the shop.
-- **Database schemas only move forward.** A rollback brings back old code, not an old schema. The gateway only adds
-  tables (no migrations yet, see DESIGN.md); WordPress and WooCommerce migrate their tables when they upgrade. So
-  before upgrading the store, take a backup; to undo an upgrade that changed the schema, roll back and restore it:
+![Servers](docs/servers.png)
+![Chat](docs/chat.png)
+![Audit log](docs/audit.png)
+![Demo](docs/demo.gif)
 
-```bash
-make backup        # deploy/backups/<time>/store-mariadb.sql.gz and platform-postgres.sql.gz (git-ignored)
-gunzip -c deploy/backups/<time>/store-mariadb.sql.gz \
-  | kubectl -n store exec -i mariadb-0 -- sh -c 'mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" wordpress'
-```
+## Roadmap and known limitations
 
-`make rollback-check` shows all of it on the running cluster in about two minutes: a broken upgrade (an image that
-doesn't exist) rolling itself back without the running pod ever being replaced, then the store and the platform
-rolled back to their previous images and forward again, with the storefront, the dashboard API and the gateway's
-connection to woo-mcp checked after each step and orders, products, users, servers and audit rows counted before
-and after.
+- Not yet deployed to a real server: production values, TLS and steps exist but have only been linted and rendered.
+- Upstream credentials are stored in plain text in Postgres (never exposed through the API); encrypting them at
+  rest is the next security step.
+- No egress NetworkPolicies; WordPress still starts as root (Apache on port 80).
+- One gateway replica and no rate limits yet.
+- Each tool call opens a new MCP session to the upstream, which costs latency (about 230 ms p50 extra per call
+  in a local benchmark); reusing pooled upstream sessions is the planned fix.
+- No schema migrations: tables are created if missing.
+- Permissions are per role and per tool, not per user or per argument.
+- notes-mcp keeps notes in memory.
+- A connected MCP client keeps its tool list until it lists again (no `tools/list_changed` push), but disabled or
+  admin-only tools are always refused when called.
 
-## Bonus and stand-out items
+## License
 
-| Item | What it does | Where | How to see it |
-|---|---|---|---|
-| #2 Tool permissions | Admin-only tools per server: hidden from members' tool lists (MCP and chat) and refused if called directly; WooCommerce's write tools locked by default | `services/gateway/app/router.py` (`routable_tools`, `call_tool`), `db.py` (`AdminOnlyTool`), `api.py`, `dashboard/src/pages/Servers.jsx`, [Tool permissions](#using-it) | Servers page: click a tool to lock it, then list tools as a member; `make test`, `make smoke` |
-| #6 Security hardening (part) | SSRF guard on upstream URLs (no metadata, localhost, private or other in-cluster addresses except the MCP services listed in Helm values; checked on save and before every connection). MariaDB and Postgres run non-root with no capabilities. Already there before: default-deny NetworkPolicies, our images non-root, no Kubernetes API tokens. Not done: encrypted credentials, egress rules, non-root WordPress | `services/gateway/app/ssrf.py`, `upstream.py` (`_run`), `api.py` (`_guard`), `charts/platform/values.yaml` (`internalUpstreamHosts`), `charts/store/templates/mariadb.yaml`, `charts/platform/templates/postgres.yaml`, [THREAT_MODEL.md](docs/THREAT_MODEL.md) section 3 | Add a server with URL `http://169.254.169.254/` (refused); `kubectl -n store exec mariadb-0 -- id`; `make test`, `make isolation` |
-| #9 Upgrades and rollback | Automatic rollback of a failed upgrade, `make history` / `make rollback`, database backups, the rules that make a rollback safe | `Makefile` (`HELM_DEPLOY`, `rollback`, `backup`), `scripts/rollback-check.sh`, [Upgrades and rollback](#upgrades-and-rollback) | `make rollback-check` |
+MIT. See [LICENSE](LICENSE).
